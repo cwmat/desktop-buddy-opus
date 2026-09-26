@@ -5,7 +5,12 @@ use std::sync::Mutex;
 use tauri::{plugin::TauriPlugin, AppHandle, Manager, Wry};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-use crate::{lock, settings::DEFAULT_HOTKEY, windows};
+use crate::{
+    lock,
+    settings::DEFAULT_HOTKEY,
+    store::{JsonObject, Store},
+    windows,
+};
 
 /// The palette shortcut currently registered with the OS, if any.
 #[derive(Default)]
@@ -22,13 +27,22 @@ pub fn plugin() -> TauriPlugin<Wry> {
         .build()
 }
 
-/// Registers the saved shortcut at startup, falling back to the default if it's unusable.
+/// Registers the saved shortcut at startup, falling back to the default if it's unusable
+/// (e.g. another app grabbed it first). A working fallback is saved, so the settings
+/// show the shortcut that actually opens the palette. Runs before any window exists,
+/// so there's no one to broadcast the change to.
 pub fn register_initial(app: &AppHandle, accelerator: &str) {
-    if let Err(err) = set(app, accelerator) {
-        eprintln!("[hotkey] {err} Falling back to {DEFAULT_HOTKEY}.");
-        if let Err(err) = set(app, DEFAULT_HOTKEY) {
-            eprintln!("[hotkey] {err}");
+    let Err(err) = set(app, accelerator) else {
+        return;
+    };
+    eprintln!("[hotkey] {err} Falling back to {DEFAULT_HOTKEY}.");
+    match set(app, DEFAULT_HOTKEY) {
+        Ok(()) => {
+            let mut patch = JsonObject::new();
+            patch.insert("paletteHotkey".into(), DEFAULT_HOTKEY.into());
+            app.state::<Store>().merge_settings(patch);
         }
+        Err(err) => eprintln!("[hotkey] {err}"),
     }
 }
 
@@ -86,15 +100,16 @@ fn parse(accelerator: &str) -> Result<Shortcut, String> {
     })?;
     if hijacks_typing(&shortcut) {
         return Err(
-            "Couldn't use that shortcut: hold Ctrl, Alt or Win with your key so normal typing still works."
+            "Couldn't use that shortcut: hold Ctrl, Alt or Win with your key (or use an F-key) so normal typing still works."
                 .into(),
         );
     }
     Ok(shortcut)
 }
 
-/// Same rule as the recorder in src/lib/ui/hotkey.ts: a modifier is required, and
-/// Shift alone only counts for keys that don't type a character (F-keys, arrows, ...).
+/// Same rule as the recorder in src/lib/ui/hotkey.ts: the key needs Ctrl, Alt or Win,
+/// unless it's F1–F24 (alone or with Shift). Shift alone isn't enough for other keys:
+/// Shift+End or Shift+Enter would stop working everywhere else.
 fn hijacks_typing(shortcut: &Shortcut) -> bool {
     if shortcut
         .mods
@@ -102,28 +117,15 @@ fn hijacks_typing(shortcut: &Shortcut) -> bool {
     {
         return false;
     }
-    shortcut.mods.is_empty() || types_character(shortcut.key)
+    !is_function_key(shortcut.key)
 }
 
-fn types_character(key: Code) -> bool {
-    let name = key.to_string();
-    (name.len() == 4 && name.starts_with("Key"))
-        || (name.len() == 6 && name.starts_with("Digit"))
-        || matches!(
-            name.as_str(),
-            "Space"
-                | "Minus"
-                | "Equal"
-                | "BracketLeft"
-                | "BracketRight"
-                | "Backslash"
-                | "Semicolon"
-                | "Quote"
-                | "Backquote"
-                | "Comma"
-                | "Period"
-                | "Slash"
-        )
+fn is_function_key(key: Code) -> bool {
+    // `Code` displays as its name: "F1" … "F24" (and "Fn", which isn't one).
+    key.to_string()
+        .strip_prefix('F')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n))
 }
 
 #[cfg(test)]
@@ -137,15 +139,24 @@ mod tests {
         assert_eq!(parse("Win+Shift+B"), parse("Super+Shift+B"));
         assert!(parse("CommandOrControl+Shift+P").is_ok());
         assert!(parse("Shift+F9").is_ok());
+        assert!(parse("F9").is_ok());
+        assert!(parse("F24").is_ok());
+        assert!(parse("Ctrl+End").is_ok());
     }
 
     #[test]
     fn rejects_bad_or_bare_shortcuts() {
         assert!(parse("").is_err());
         assert!(parse("Ctrl+Nope").is_err());
+        assert!(parse("Ctrl+Shift").is_err());
         assert!(parse("B").is_err());
         assert!(parse("Shift+B").is_err());
         assert!(parse("Shift+Space").is_err());
-        assert!(parse("F9").is_err());
+        assert!(parse("End").is_err());
+        assert!(parse("Shift+End").is_err());
+        assert!(parse("Shift+Up").is_err());
+        assert!(parse("Shift+Enter").is_err());
+        assert!(parse("Shift+Insert").is_err());
+        assert!(parse("Shift+Numpad0").is_err());
     }
 }

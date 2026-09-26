@@ -9,7 +9,7 @@ use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::{
-    platform::{self, ScreenRect},
+    platform::{self, ForegroundWindow, ScreenRect},
     settings,
     store::Store,
     tray::{self, PetSummary},
@@ -27,7 +27,7 @@ pub struct AppInfo {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSnapshot {
     idle_seconds: Option<f64>,
-    foreground_window: Option<ScreenRect>,
+    foreground_window: Option<ForegroundWindow>,
     fullscreen_monitor: Option<ScreenRect>,
 }
 
@@ -86,6 +86,11 @@ pub fn environment_snapshot() -> EnvironmentSnapshot {
 #[tauri::command]
 pub fn keep_pet_on_top(app: AppHandle) {
     windows::keep_pet_on_top(&app);
+}
+
+#[tauri::command]
+pub fn restore_foreground(app: AppHandle) {
+    windows::restore_foreground(&app);
 }
 
 #[tauri::command]

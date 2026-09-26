@@ -189,13 +189,15 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     }
 }
 
-/// Same write path as the settings window (which rebuilds the menu on success).
+/// Same write path as the settings window.
 fn apply(app: &AppHandle, patch: serde_json::Value) {
     if let Err(err) = settings::update(app, patch) {
         eprintln!("[tray] couldn't update settings: {err}");
-        // Windows flips a check item as soon as it's clicked; put it back.
-        refresh(app);
     }
+    // Windows flips a check item as soon as it's clicked, and `settings::update` only
+    // rebuilds the menu when a shown setting changed: re-clicking the checked buddy
+    // would otherwise leave none checked.
+    refresh(app);
 }
 
 fn send_action(app: &AppHandle, action: PetAction) {

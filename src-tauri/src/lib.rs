@@ -36,6 +36,7 @@ pub fn run() {
             commands::register_pets,
             commands::environment_snapshot,
             commands::keep_pet_on_top,
+            commands::restore_foreground,
             commands::open_settings,
             commands::show_palette,
             commands::hide_palette,

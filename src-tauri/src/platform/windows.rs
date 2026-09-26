@@ -1,8 +1,13 @@
 //! Win32 implementation. Every call here is a cheap, read-only query (the pet polls
-//! them ~2×/s) except `keep_on_top`. All rects are physical pixels: Tauri makes the
-//! process per-monitor DPI aware.
+//! them ~2×/s) except `keep_on_top` and `restore_foreground`. All rects are physical
+//! pixels: Tauri makes the process per-monitor DPI aware.
 
-use std::{ffi::c_void, mem::size_of};
+use std::{
+    ffi::c_void,
+    mem::size_of,
+    ptr::null_mut,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 
 use tauri::WebviewWindow;
 use windows_sys::Win32::{
@@ -14,20 +19,16 @@ use windows_sys::Win32::{
     System::SystemInformation::GetTickCount,
     UI::{
         Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO},
-        Shell::{
-            SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE,
-            QUNS_RUNNING_D3D_FULL_SCREEN,
-        },
         WindowsAndMessaging::{
-            GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowRect,
-            GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, SetWindowPos,
-            GWL_EXSTYLE, GWL_STYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-            SWP_NOSIZE, WS_CAPTION, WS_EX_TOOLWINDOW,
+            GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect,
+            GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, SetForegroundWindow,
+            SetWindowPos, GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, HWND_TOPMOST, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, WS_CAPTION, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         },
     },
 };
 
-use super::ScreenRect;
+use super::{ForegroundWindow, ScreenRect};
 
 /// Foreground windows smaller than this (tooltips, toasts, tiny dialogs) aren't reported.
 const MIN_WIDTH: i32 = 160;
@@ -40,6 +41,22 @@ const SHELL_CLASSES: [&str; 4] = [
     "Shell_TrayWnd",
     "Shell_SecondaryTrayWnd",
 ];
+
+/// The taskbars (primary and other monitors): clicking one (e.g. a tray icon) focuses it
+/// and raises it over the pet.
+const TASKBAR_CLASSES: [&str; 2] = ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
+
+/// How far `keep_on_top` walks up the z-order. Only a guard: the z-order can change
+/// while we walk it, and the topmost band above the pet is short.
+const MAX_Z_WALK: usize = 1024;
+
+/// The last app window seen in front (see [`app_window`]). Our own windows and the shell
+/// never replace it, so it still names the window the user was working in while the
+/// palette, a menu or the taskbar has the focus.
+static LAST_APP_WINDOW: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+
+/// The last window seen covering its whole monitor (see [`fullscreen_monitor`]).
+static LAST_FULLSCREEN: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 pub fn idle_seconds() -> Option<f64> {
     let mut info = LASTINPUTINFO {
@@ -56,58 +73,122 @@ pub fn idle_seconds() -> Option<f64> {
     Some(f64::from(now.wrapping_sub(info.dwTime)) / 1000.0)
 }
 
-/// Bounds of the app window the user is working in, if it's a normal, restored window.
-pub fn foreground_window() -> Option<ScreenRect> {
-    let hwnd = foreign_foreground()?;
+/// The app window the user is working in, if it's a normal, restored window. While one
+/// of our windows or a taskbar is in front, that's still the last app window: opening
+/// the palette or the tray menu shouldn't knock a perched pet off.
+pub fn foreground_window() -> Option<ForegroundWindow> {
+    let hwnd = working_window()?;
     if is_zoomed(hwnd) {
         return None;
     }
     let rect = frame_bounds(hwnd)?;
     let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
-    (width >= MIN_WIDTH && height >= MIN_HEIGHT).then_some(ScreenRect {
-        x: rect.left,
-        y: rect.top,
-        width,
-        height,
+    (width >= MIN_WIDTH && height >= MIN_HEIGHT).then_some(ForegroundWindow {
+        id: hwnd as isize as i64,
+        rect: ScreenRect {
+            x: rect.left,
+            y: rect.top,
+            width,
+            height,
+        },
     })
 }
 
-/// The monitor where a game, video or presentation is fullscreen, if any. Only the pet
-/// on that monitor needs to step aside. The monitor-coverage check catches
-/// borderless-fullscreen games and F11 browsers; the shell's notification state catches
-/// exclusive fullscreen and presentation mode.
+/// The monitor showing a fullscreen game, video or presentation, if any, so only the pet
+/// on that monitor steps aside. Judged by geometry (an app window covering its whole
+/// monitor: exclusive and borderless fullscreen, F11 browsers, slideshows) rather than the
+/// shell's notification state, which is system-wide and would hide pets on every monitor.
+///
+/// A fullscreen window keeps its monitor while the user works on another one (a game stays
+/// on screen when you switch to a chat on the second monitor). It's forgotten once another
+/// app window comes to the front on that monitor, or it stops covering it.
 pub fn fullscreen_monitor() -> Option<ScreenRect> {
-    let hwnd = foreign_foreground()?;
-    let monitor = monitor_bounds(hwnd)?;
-    (covers_monitor(hwnd, &monitor) || shell_reports_busy()).then(|| ScreenRect {
-        x: monitor.left,
-        y: monitor.top,
-        width: monitor.right - monitor.left,
-        height: monitor.bottom - monitor.top,
-    })
-}
-
-/// Pushes the window back to the top of the topmost band without moving or activating it.
-pub fn keep_on_top(window: &WebviewWindow) {
-    let Ok(hwnd) = window.hwnd() else {
-        return;
+    // SAFETY: no preconditions; may return null.
+    let foreground = unsafe { GetForegroundWindow() };
+    if let Some(monitor) = fullscreen_on(foreground) {
+        LAST_FULLSCREEN.store(foreground, Ordering::Relaxed);
+        return Some(screen_rect(monitor));
+    }
+    let last = fullscreen_on(LAST_FULLSCREEN.load(Ordering::Relaxed));
+    let covered_by_foreground = |m: &RECT| {
+        is_app_window(foreground) && monitor_bounds(foreground).is_some_and(|f| same_rect(&f, m))
     };
-    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
-    // SAFETY: `hwnd` belongs to a live Tauri window; the flags ignore position and size.
-    if unsafe { SetWindowPos(hwnd.0, HWND_TOPMOST, 0, 0, 0, 0, flags) } == 0 {
-        eprintln!("[platform] SetWindowPos(HWND_TOPMOST) failed");
+    match last {
+        Some(monitor) if !covered_by_foreground(&monitor) => Some(screen_rect(monitor)),
+        _ => {
+            LAST_FULLSCREEN.store(null_mut(), Ordering::Relaxed);
+            None
+        }
     }
 }
 
-fn shell_reports_busy() -> bool {
-    let mut state = 0;
-    // SAFETY: `state` is a valid out pointer for the duration of the call.
-    let hr = unsafe { SHQueryUserNotificationState(&mut state) };
-    hr >= 0
-        && matches!(
-            state,
-            QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE
-        )
+/// Puts the pet back above the taskbar after a click on the taskbar raised it over the
+/// pet, without moving or activating it. The pet goes directly above the highest
+/// taskbar rather than to the very top, so whatever opened above the taskbar since
+/// (popup menus, including the tray menu a taskbar click opens, and the palette) stays
+/// above the pet. No-op while no taskbar is above it.
+pub fn keep_on_top(window: &WebviewWindow) {
+    let Ok(pet) = window.hwnd() else {
+        return;
+    };
+    let Some(taskbar) = highest_taskbar_above(pet.0) else {
+        return;
+    };
+    // SAFETY: plain query on a window handle; null when the taskbar is at the very top.
+    let above = unsafe { GetWindow(taskbar, GW_HWNDPREV) };
+    // Inserting after a topmost window keeps the pet in the topmost band.
+    let insert_after = if above.is_null() || ex_style(above) & WS_EX_TOPMOST == 0 {
+        HWND_TOPMOST
+    } else {
+        above
+    };
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+    // SAFETY: `pet` belongs to a live Tauri window; the flags ignore position and size.
+    if unsafe { SetWindowPos(pet.0, insert_after, 0, 0, 0, 0, flags) } == 0 {
+        eprintln!("[platform] couldn't raise the pet above the taskbar");
+    }
+}
+
+/// Gives the foreground back to the last app window if the pet window has it (showing
+/// the pet's context menu activates the pet). Best-effort and silent: Windows allows it
+/// because our process owns the foreground, and if it refuses nothing changes.
+pub fn restore_foreground(pet: &WebviewWindow) {
+    let Ok(pet) = pet.hwnd() else {
+        return;
+    };
+    // SAFETY: no preconditions; may return null.
+    if unsafe { GetForegroundWindow() } != pet.0 {
+        return;
+    }
+    if let Some(hwnd) = last_app_window() {
+        // SAFETY: plain call on a window handle; a stale handle just fails.
+        unsafe { SetForegroundWindow(hwnd) };
+    }
+}
+
+/// The highest taskbar above `hwnd` in the z-order, if any.
+fn highest_taskbar_above(hwnd: HWND) -> Option<HWND> {
+    let mut highest = None;
+    let mut current = hwnd;
+    for _ in 0..MAX_Z_WALK {
+        // SAFETY: plain query on a window handle; null past the top or for a stale handle.
+        current = unsafe { GetWindow(current, GW_HWNDPREV) };
+        if current.is_null() {
+            break;
+        }
+        if has_class(current, &TASKBAR_CLASSES) {
+            highest = Some(current);
+        }
+    }
+    highest
+}
+
+/// The monitor `hwnd` covers entirely, if it's an app window that does.
+fn fullscreen_on(hwnd: HWND) -> Option<RECT> {
+    if !is_app_window(hwnd) {
+        return None;
+    }
+    monitor_bounds(hwnd).filter(|monitor| covers_monitor(hwnd, monitor))
 }
 
 fn covers_monitor(hwnd: HWND, monitor: &RECT) -> bool {
@@ -124,25 +205,48 @@ fn covers_monitor(hwnd: HWND, monitor: &RECT) -> bool {
         && window.bottom >= monitor.bottom
 }
 
-/// The foreground window, if it's a visible, non-minimized app window that isn't ours,
-/// a tool window, or part of the desktop shell.
-fn foreign_foreground() -> Option<HWND> {
+/// The app window the user is working in: the foreground window, or the last app window
+/// while ours or a taskbar is in front (or nothing is, mid-switch). The desktop doesn't
+/// count: "Show desktop" (Win+D) can put it over app windows without minimizing them,
+/// so the last one may not be on screen.
+fn working_window() -> Option<HWND> {
     // SAFETY: no preconditions; may return null.
     let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.is_null() || is_own(hwnd) {
+    if hwnd.is_null() || is_own(hwnd) || has_class(hwnd, &TASKBAR_CLASSES) {
+        last_app_window()
+    } else {
+        app_window(hwnd)
+    }
+}
+
+/// `hwnd` if it's an app window, which then becomes the remembered [`LAST_APP_WINDOW`].
+fn app_window(hwnd: HWND) -> Option<HWND> {
+    if !is_app_window(hwnd) {
         return None;
+    }
+    LAST_APP_WINDOW.store(hwnd, Ordering::Relaxed);
+    Some(hwnd)
+}
+
+/// The last app window seen in front, if it still is an app window on screen.
+fn last_app_window() -> Option<HWND> {
+    let hwnd = LAST_APP_WINDOW.load(Ordering::Relaxed);
+    is_app_window(hwnd).then_some(hwnd)
+}
+
+/// A visible, non-minimized window that isn't ours, a tool window, or part of the
+/// desktop shell. A null or stale handle isn't one.
+fn is_app_window(hwnd: HWND) -> bool {
+    if hwnd.is_null() || is_own(hwnd) {
+        return false;
     }
     // SAFETY: plain queries on a window handle; a stale handle just yields FALSE.
     let (visible, minimized) = unsafe { (IsWindowVisible(hwnd) != 0, IsIconic(hwnd) != 0) };
-    if !visible
-        || minimized
-        || is_cloaked(hwnd)
-        || ex_style(hwnd) & WS_EX_TOOLWINDOW != 0
-        || is_shell(hwnd)
-    {
-        return None;
-    }
-    Some(hwnd)
+    visible
+        && !minimized
+        && !is_cloaked(hwnd)
+        && ex_style(hwnd) & WS_EX_TOOLWINDOW == 0
+        && !is_shell(hwnd)
 }
 
 /// Any window of this process (pet, palette, settings, menus) counts as ours.
@@ -185,6 +289,10 @@ fn is_cloaked(hwnd: HWND) -> bool {
 }
 
 fn is_shell(hwnd: HWND) -> bool {
+    has_class(hwnd, &SHELL_CLASSES)
+}
+
+fn has_class(hwnd: HWND, classes: &[&str]) -> bool {
     let mut buf = [0u16; 64];
     // SAFETY: `buf` is writable for the length we pass.
     let len = unsafe { GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
@@ -192,7 +300,7 @@ fn is_shell(hwnd: HWND) -> bool {
         return false;
     }
     let class = String::from_utf16_lossy(&buf[..len as usize]);
-    SHELL_CLASSES.contains(&class.as_str())
+    classes.contains(&class.as_str())
 }
 
 /// Visible bounds: DWM's extended frame excludes the invisible resize borders that
@@ -213,6 +321,19 @@ fn frame_bounds(hwnd: HWND) -> Option<RECT> {
     }
     // SAFETY: `rect` is a valid out pointer.
     (unsafe { GetWindowRect(hwnd, &mut rect) } != 0).then_some(rect)
+}
+
+fn screen_rect(r: RECT) -> ScreenRect {
+    ScreenRect {
+        x: r.left,
+        y: r.top,
+        width: r.right - r.left,
+        height: r.bottom - r.top,
+    }
+}
+
+fn same_rect(a: &RECT, b: &RECT) -> bool {
+    (a.left, a.top, a.right, a.bottom) == (b.left, b.top, b.right, b.bottom)
 }
 
 fn monitor_bounds(hwnd: HWND) -> Option<RECT> {

@@ -43,7 +43,8 @@ pub fn open_settings(app: &AppHandle, section: Option<&str>) -> tauri::Result<()
     // Built hidden so it can be moved to the cursor's monitor before it appears.
     let window = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App(url.into()))
         .title("Desktop Buddy Settings")
-        .inner_size(960.0, 680.0)
+        // Fits (title bar included) the 672-logical-px work area of a 1080p screen at 150%.
+        .inner_size(960.0, 620.0)
         .min_inner_size(760.0, 540.0)
         .center()
         .visible(false)
@@ -100,13 +101,21 @@ pub fn toggle_palette(app: &AppHandle) {
     }
 }
 
-/// Re-asserts topmost z-order for the pet (Windows drops it under the taskbar after
-/// the taskbar is clicked). No-op when hidden or on other platforms.
+/// Puts the pet back above the taskbar (clicking the taskbar raises it over the pet),
+/// leaving menus and the palette above it. No-op when hidden or on other platforms.
 pub fn keep_pet_on_top(app: &AppHandle) {
     if let Some(pet) = app.get_webview_window(PET) {
         if pet.is_visible().unwrap_or(false) {
             platform::keep_on_top(&pet);
         }
+    }
+}
+
+/// After the pet's context menu closes: if it left the pet window in the foreground,
+/// hand the foreground back to the app the user was working in.
+pub fn restore_foreground(app: &AppHandle) {
+    if let Some(pet) = app.get_webview_window(PET) {
+        platform::restore_foreground(&pet);
     }
 }
 

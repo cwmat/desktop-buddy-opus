@@ -107,7 +107,10 @@ pub fn update(app: &AppHandle, patch: Value) -> Result<Value, String> {
     if autostart_changed {
         set_launch_at_login(app, after.launch_at_login)?;
     }
-    if after.palette_hotkey != before.palette_hotkey {
+    // Not "if it changed": the stored hotkey may not be the registered one (another app
+    // held it at login), so re-sending the same one retries it and reports any conflict.
+    // `hotkey::set` is a no-op when it's already registered.
+    if patch.contains_key("paletteHotkey") {
         if let Err(err) = hotkey::set(app, &after.palette_hotkey) {
             if autostart_changed {
                 if let Err(undo) = set_launch_at_login(app, before.launch_at_login) {
@@ -122,7 +125,14 @@ pub fn update(app: &AppHandle, patch: Value) -> Result<Value, String> {
     if let Err(err) = app.emit(events::SETTINGS_CHANGED, &merged) {
         eprintln!("[settings] couldn't broadcast change: {err}");
     }
-    tray::refresh(app);
+    // Rebuilding the tray menu is only worth it when something it shows changed; sliders
+    // write on every tick.
+    if after.pet_id != before.pet_id
+        || after.movement != before.movement
+        || after.click_through != before.click_through
+    {
+        tray::refresh(app);
+    }
     Ok(merged)
 }
 

@@ -3,11 +3,12 @@
 //!
 //! Both halves are opaque JSON objects owned by TypeScript (`src/lib/settings.ts`,
 //! `src/lib/stats.ts`), which normalizes whatever it reads. Every change is written
-//! straight through, atomically (temp file + rename), while holding the lock so
-//! writes can never land out of order.
+//! straight through, atomically and durably (flushed temp file + rename), while
+//! holding the lock so writes can never land out of order.
 
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -105,7 +106,12 @@ fn write_atomic(path: &Path, data: &Data) -> io::Result<()> {
         fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(data)?)?;
+    let mut file = fs::File::create(&tmp)?;
+    file.write_all(&serde_json::to_vec_pretty(data)?)?;
+    // Flush the data to disk before the rename: file systems journal the rename but not
+    // the data, so after a power cut the new name could point at zeros.
+    file.sync_all()?;
+    drop(file);
     // `rename` replaces the destination atomically (MoveFileEx on Windows).
     fs::rename(&tmp, path)
 }
