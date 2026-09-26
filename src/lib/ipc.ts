@@ -23,8 +23,11 @@ export interface EnvironmentSnapshot {
    * the taskbar, minimized and maximized windows). null if none or unsupported.
    */
   foregroundWindow: ScreenRect | null;
-  /** A fullscreen game/video/presentation is in front. Always false where unsupported. */
-  fullscreenActive: boolean;
+  /**
+   * Bounds of the monitor where a fullscreen game/video/presentation is in front, so only
+   * a pet on that monitor steps aside. null if none or unsupported.
+   */
+  fullscreenMonitor: ScreenRect | null;
 }
 
 export interface AppInfo {
