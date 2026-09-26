@@ -1,0 +1,86 @@
+<script lang="ts">
+  interface Props {
+    value: number;
+    min: number;
+    max: number;
+    step: number;
+    label: string;
+    format: (value: number) => string;
+    onchange: (value: number) => void;
+  }
+
+  let { value, min, max, step, label, format, onchange }: Props = $props();
+
+  const fill = $derived(`${((value - min) / (max - min)) * 100}%`);
+</script>
+
+<div class="slider">
+  <input
+    type="range"
+    {min}
+    {max}
+    {step}
+    {value}
+    aria-label={label}
+    aria-valuetext={format(value)}
+    style:--fill={fill}
+    oninput={(e) => onchange(Number(e.currentTarget.value))}
+  />
+  <output>{format(value)}</output>
+</div>
+
+<style>
+  .slider {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  output {
+    min-width: 44px;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+  input {
+    width: 180px;
+    height: 20px;
+    margin: 0;
+    background: none;
+    appearance: none;
+  }
+  input::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background: linear-gradient(to right, var(--accent-fg) var(--fill), var(--surface-3) var(--fill));
+  }
+  input::-webkit-slider-thumb {
+    width: 16px;
+    height: 16px;
+    margin-top: -6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+    appearance: none;
+    transition: transform var(--dur-fast) var(--ease);
+  }
+  input:hover::-webkit-slider-thumb {
+    transform: scale(1.12);
+  }
+  input:active::-webkit-slider-thumb {
+    transform: scale(0.95);
+  }
+  input:focus-visible {
+    outline: none;
+  }
+  input:focus-visible::-webkit-slider-thumb {
+    outline: 2px solid var(--accent-fg);
+    outline-offset: 2px;
+  }
+</style>
