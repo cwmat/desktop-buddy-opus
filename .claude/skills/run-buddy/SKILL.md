@@ -34,6 +34,28 @@ powershell -File .claude/skills/run-buddy/shot.ps1 -Window pet      # screenshot
 
 Then read the PNG. Window labels: `pet` (title "Desktop Buddy"), `settings`, `palette`.
 
+## Drive it without touching the user's mouse or keyboard
+
+Launch with WebView2's debug port, then evaluate JS inside a window — trigger actions, change settings, inspect state — instead of synthesizing input (which would fight whatever the user is doing):
+
+```bash
+WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9223" pnpm dev
+node .claude/skills/run-buddy/cdp.mjs pet.html "await window.__TAURI_INTERNALS__.invoke('plugin:event|emit', { event: 'pet://action', payload: { type: 'treat' } })"
+node .claude/skills/run-buddy/cdp.mjs pet.html "return await window.__TAURI_INTERNALS__.invoke('update_settings', { patch: { petId: 'ember' } })"
+```
+
+Prefer showing windows *without* focus (`plugin:window|show`) over commands that steal focus while the user is working. If the user is active (`environment_snapshot` → `idleSeconds` near 0), keep tests on a monitor they aren't using.
+
+## Idle cost
+
+The pet runs all day, so check CPU after touching the frame loop, polling or animations:
+
+```powershell
+powershell -File .claude/skills/run-buddy/cpu.ps1 -Seconds 10   # per-process CPU + memory for the app and its WebView2 processes
+```
+
+Measure release builds for real numbers (debug Rust + dev server roughly double it). A hidden window should show ~0 ms.
+
 ## UI without the Rust app
 
 `pnpm web:dev` then open `http://localhost:1420/settings.html` or `/palette.html` in a browser: outside Tauri the dev build installs IPC mocks (`src/lib/dev-mock.ts`), so the settings and palette UIs render with sample data. The pet window needs the real app.

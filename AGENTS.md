@@ -58,6 +58,15 @@ Definition of done: `pnpm check`, `pnpm test`, clippy and fmt all clean. For beh
 - New dependencies need a clear reason; prefer the platform and what's already here.
 - New Tauri window APIs used from JS may need a permission in `src-tauri/capabilities/default.json`.
 
+## Gotchas (learned the hard way)
+
+- Windows declared in `tauri.conf.json` use `create: false` and are built in `setup` *after* state is managed — their scripts call commands immediately.
+- Creating a webview from a **sync** command deadlocks on Windows; use an `async` command (see `open_settings`).
+- Hidden webviews keep running JS and `requestAnimationFrame`. Stop animations while a window is hidden (the palette lives all session).
+- The pet loop is adaptive (calm ≈10 Hz, busy = rAF); keep idle work near zero and re-measure after touching it (`run-buddy` skill, `cpu.ps1`).
+- Fullscreen detection is per-monitor geometry. `SHQueryUserNotificationState` is system-wide — it would hide pets on every monitor.
+- A `.svelte` file without `<script lang="ts">` is treated as untyped JS by svelte-check, breaking typed imports of it.
+
 ## Git
 
 - `main` stays releasable; work on branches: `feat/…`, `fix/…`, `chore/…`, `docs/…`.
