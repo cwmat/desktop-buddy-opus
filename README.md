@@ -4,7 +4,7 @@ A tiny pixel-art pet that lives on your desktop. It naps on your taskbar, wander
 
 ![The buddies](docs/roster.png)
 
-**Quackers** the rubber debug duck · **Boolean** the binary ghost · **Glorp** the semicolon slime · **Sprocket** the pocket robot · **Capybyte** the chill capybara · **Ember** the pocket dragon
+**Quackers** the rubber debug duck · **Boolean** the binary ghost · **Glorp** the semicolon slime · **Sprocket** the pocket robot · **Capybyte** the chill capybara · **Ember** the pocket dragon · **Callback** the async octopus · **Segfault** the chaos cat · **Owlgorithm** the night owl · **Shellby** the shell script turtle · **Spore** the glowcap mushroom
 
 ## Features
 
