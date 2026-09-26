@@ -18,6 +18,13 @@
   let selected = $state(0);
   let error = $state<string | null>(null);
   let running = false;
+  /**
+   * Whether the palette is showing. The window lives hidden all session and the webview
+   * keeps its last frame while hidden, so closing empties the panel and makes it
+   * transparent: the next open never flashes the previous query. Also keeps the
+   * sprites still while hidden (the webview still runs animation frames then).
+   */
+  let open = $state(false);
 
   let panel: HTMLElement;
   let input: HTMLInputElement;
@@ -44,7 +51,15 @@
     tick().then(() => list?.querySelector(`#${id}`)?.scrollIntoView({ block: 'nearest' }));
   });
 
-  const hide = () => ipc.hidePalette().catch(() => {});
+  /** Every way out ends here (Esc, running a command, clicking away, the hotkey, Alt+F4). */
+  function close() {
+    open = false;
+    query = '';
+    selected = 0;
+    error = null;
+    list?.scrollTo({ top: 0 });
+    return ipc.hidePalette().catch(() => {});
+  }
 
   function select(index: number) {
     if (flat.length) selected = Math.max(0, Math.min(flat.length - 1, index));
@@ -60,7 +75,7 @@
     error = null;
     try {
       await command.run();
-      await hide();
+      await close();
     } catch (err) {
       error = String(err);
     } finally {
@@ -78,7 +93,7 @@
       PageDown: () => select(active + 5),
       PageUp: () => select(active - 5),
       Enter: () => run(flat[active]),
-      Escape: hide,
+      Escape: close,
     };
     const action = keys[e.key];
     if (!action) return;
@@ -86,10 +101,8 @@
     action();
   }
 
-  function reset() {
-    query = '';
-    selected = 0;
-    error = null;
+  function onOpened() {
+    open = true;
     tick().then(() => input?.focus());
     if (!prefersReducedMotion()) {
       panel?.animate(
@@ -104,17 +117,25 @@
 
   // Clicks on the transparent margin around the panel dismiss it, like clicking away.
   function onWindowMousedown(e: MouseEvent) {
-    if (!panel.contains(e.target as Node)) hide();
+    if (!panel.contains(e.target as Node)) close();
   }
 
   onMount(() => {
     const listeners: Promise<UnlistenFn>[] = [
       onSettingsChanged((next) => (settings = next)),
-      onPaletteOpened(reset),
+      onPaletteOpened(onOpened),
+      // Hiding from Rust (hotkey toggle, tray, Alt+F4) also blurs us, so this catches those.
       getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-        if (!focused) hide();
+        if (!focused) close();
       }),
     ];
+    // A hotkey pressed while this page was still loading showed the window before we listened.
+    getCurrentWindow()
+      .isVisible()
+      .then((visible) => {
+        if (visible && !open) onOpened();
+      })
+      .catch(() => {});
     loadState()
       .then((state) => (settings = state.settings))
       .catch(() => {});
@@ -129,9 +150,9 @@
 
 <svelte:window onmousedown={onWindowMousedown} />
 
-<div class="panel" bind:this={panel}>
+<div class="panel" class:open bind:this={panel}>
   <div class="search">
-    <div class="avatar"><Sprite {pet} scale={1} /></div>
+    <div class="avatar"><Sprite {pet} scale={1} playing={open} /></div>
     <input
       bind:this={input}
       bind:value={query}
@@ -162,6 +183,7 @@
             {indices}
             id={`cmd-${index}`}
             selected={index === active}
+            playing={open}
             onhover={() => (selected = index)}
             onrun={() => run(item)}
           />
@@ -169,7 +191,7 @@
       </div>
     {:else}
       <div class="empty">
-        <Sprite {pet} animation="sleep" scale={2} />
+        <Sprite {pet} animation="sleep" scale={2} playing={open} />
         <p>Nothing matches “{query.trim()}”.<br />{pet.name} is as puzzled as you are.</p>
       </div>
     {/each}
@@ -210,6 +232,9 @@
     border-radius: var(--radius-lg);
     background: var(--surface);
     box-shadow: var(--shadow-lg);
+  }
+  .panel:not(.open) {
+    opacity: 0;
   }
 
   .search {

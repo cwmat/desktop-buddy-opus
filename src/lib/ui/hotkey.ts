@@ -5,7 +5,10 @@
  */
 import type { Platform } from '$lib/settings';
 
-export type KeyLike = Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>;
+export type KeyLike = Pick<
+  KeyboardEvent,
+  'key' | 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'getModifierState'
+>;
 
 const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'OS', 'AltGraph']);
 
@@ -51,9 +54,6 @@ const PUNCTUATION_LABELS: Record<string, string> = {
   Slash: '/',
 };
 
-/** Keys that type a character: Shift alone would hijack normal typing. */
-const isPrintable = (key: string) => key.length === 1 || key === 'Space' || key in PUNCTUATION_LABELS;
-
 export function keyFromCode(code: string): string | null {
   if (/^Key[A-Z]$/.test(code)) return code.slice(3);
   if (/^Digit[0-9]$/.test(code)) return code.slice(5);
@@ -62,16 +62,21 @@ export function keyFromCode(code: string): string | null {
   return NAMED_KEYS[code] ?? null;
 }
 
-/** Modifier names in accelerator order. Ctrl is "CommandOrControl" so it maps to ⌘ on macOS. */
+/**
+ * Modifier names in accelerator order. Ctrl is "CommandOrControl" so it maps to ⌘ on macOS.
+ * AltGr is ignored: Windows reports it as Ctrl+Alt, but it's how many layouts type
+ * characters (AltGr+Q is @ on German keyboards), so it must not count as a shortcut modifier.
+ */
 export function modifiersOf(e: KeyLike, platform: Platform): string[] {
   const mods: string[] = [];
+  const altGr = platform !== 'macos' && e.getModifierState('AltGraph');
   if (platform === 'macos') {
     if (e.metaKey) mods.push('CommandOrControl');
     if (e.ctrlKey) mods.push('Control');
-  } else if (e.ctrlKey) {
+  } else if (e.ctrlKey && !altGr) {
     mods.push('CommandOrControl');
   }
-  if (e.altKey) mods.push('Alt');
+  if (e.altKey && !altGr) mods.push('Alt');
   if (e.shiftKey) mods.push('Shift');
   if (platform !== 'macos' && e.metaKey) mods.push('Super');
   return mods;
@@ -91,10 +96,12 @@ export function recordKey(e: KeyLike, platform: Platform): RecordResult {
 
   const key = keyFromCode(e.code);
   if (!key) return { kind: 'invalid', reason: 'That key can’t be used in a shortcut. Try a letter, number or F-key.' };
+  // Shared with src-tauri/src/hotkey.rs: F-keys may go alone (or with Shift); anything
+  // else needs Ctrl/Alt/Super, since Shift+key or a bare key is normal typing and editing.
   const mainMods = mods.filter((m) => m !== 'Shift');
-  if (mods.length === 0 || (mainMods.length === 0 && isPrintable(key))) {
+  if (mainMods.length === 0 && !/^F\d+$/.test(key)) {
     const names = platform === 'macos' ? '⌘, ⌥ or ⌃' : platform === 'windows' ? 'Ctrl, Alt or Win' : 'Ctrl, Alt or Super';
-    return { kind: 'invalid', reason: `Add ${names} so normal typing still works.` };
+    return { kind: 'invalid', reason: `Add ${names} (or use an F-key) so normal typing still works.` };
   }
   return { kind: 'done', accelerator: [...mods, key].join('+') };
 }

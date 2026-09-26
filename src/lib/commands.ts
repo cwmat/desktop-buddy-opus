@@ -15,6 +15,7 @@ import {
   type SettingSection,
   type Settings,
 } from './settings';
+import { acceleratorKeys } from './ui/hotkey';
 import type { IconName } from './ui/icons';
 
 export type CommandGroup = 'Actions' | 'Buddies' | 'Settings';
@@ -176,14 +177,14 @@ const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 const sameValue = (a: number, b: number) => Math.abs(a - b) < 1e-6;
 
 function settingCommands(settings: Settings, platform: Platform, deps: CommandDeps): Command[] {
-  const commands = defsFor(platform).flatMap((def) => defCommands(def, settings, deps));
+  const commands = defsFor(platform).flatMap((def) => defCommands(def, settings, platform, deps));
   for (const cmd of commands) {
     cmd.suggested = SUGGESTED_SETTINGS.some((id) => (id.endsWith(':') ? cmd.id.startsWith(id) : cmd.id === id));
   }
   return commands;
 }
 
-function defCommands(def: SettingDef, settings: Settings, deps: CommandDeps): Command[] {
+function defCommands(def: SettingDef, settings: Settings, platform: Platform, deps: CommandDeps): Command[] {
   const section = SECTIONS.find((s) => s.id === def.section)?.label ?? def.section;
   const base = {
     group: 'Settings' as const,
@@ -228,7 +229,8 @@ function defCommands(def: SettingDef, settings: Settings, deps: CommandDeps): Co
           id: `setting:${def.key}`,
           title: `Change ${lowerFirst(def.label)}…`,
           subtitle: def.description,
-          hint: settings[def.key],
+          // Keycap labels, like everywhere else ("Ctrl + Shift + P", not "CommandOrControl+Shift+P").
+          hint: acceleratorKeys(settings[def.key], platform).join(' + '),
           icon: base.icon ?? 'keyboard',
           keywords: [...base.keywords, 'record', 'rebind'],
           run: () => deps.openSettings(def.section),

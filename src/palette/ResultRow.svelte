@@ -10,11 +10,13 @@
     indices: number[];
     id: string;
     selected: boolean;
+    /** False while the palette is hidden, so buddy sprites stay still. */
+    playing: boolean;
     onhover: () => void;
     onrun: () => void;
   }
 
-  let { command, indices, id, selected, onhover, onrun }: Props = $props();
+  let { command, indices, id, selected, playing, onhover, onrun }: Props = $props();
 </script>
 
 <!-- Focus stays in the search input (combobox); rows are pointer targets only. -->
@@ -32,7 +34,7 @@
 >
   <span class="glyph" class:buddy={!!command.petId}>
     {#if command.petId}
-      <Sprite pet={getPet(command.petId)} scale={1} animation={selected ? 'walk' : 'idle'} playing={selected} />
+      <Sprite pet={getPet(command.petId)} scale={1} animation={selected ? 'walk' : 'idle'} playing={playing && selected} />
     {:else if command.icon}
       <Icon name={command.icon} size={16} />
     {/if}

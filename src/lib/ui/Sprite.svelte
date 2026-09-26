@@ -1,8 +1,10 @@
 <!--
   Animated buddy sprite. Always crisp: integer device pixels per sprite pixel,
-  no smoothing. Honors prefers-reduced-motion by showing a still frame.
+  no smoothing. Honors prefers-reduced-motion by showing a still frame, and only
+  animates while it can be seen (on screen, page not hidden, `playing`).
 -->
 <script lang="ts">
+  import { devicePixelRatio } from 'svelte/reactivity/window';
   import { SPRITE_SIZE, type AnimationName, type PetDefinition } from '$pets/types';
   import { animationFor, framesOf } from './sprites';
   import { prefersReducedMotion } from './theme';
@@ -12,6 +14,7 @@
     animation?: AnimationName;
     /** CSS px per sprite pixel (rounded to whole device pixels). */
     scale?: number;
+    /** Animate; false shows the first frame. Pass false while the window is hidden. */
     playing?: boolean;
     /** Mirror horizontally (sprites face right). */
     flip?: boolean;
@@ -22,6 +25,16 @@
   let { pet, animation = 'idle', scale = 2, playing = true, flip = false, label }: Props = $props();
 
   let canvas: HTMLCanvasElement;
+  /** Scrolled into view (e.g. a gallery card further down isn't). */
+  let onScreen = $state(true);
+  let pageHidden = $state(document.hidden);
+
+  $effect(() => {
+    // Entries arrive oldest first; a fast scroll can batch a leave and a re-enter.
+    const observer = new IntersectionObserver((entries) => (onScreen = entries.at(-1)!.isIntersecting));
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  });
 
   const blinkDelay = () => 2200 + Math.random() * 4000;
   const BLINK_MS = 140;
@@ -31,7 +44,8 @@
     const frames = framesOf(pet, anim);
     const blink = animation === 'idle' && pet.animations.blink ? framesOf(pet, pet.animations.blink)[0] : null;
 
-    const dpr = window.devicePixelRatio || 1;
+    // Reactive: the palette and settings windows can move to a monitor with another scale.
+    const dpr = devicePixelRatio.current || 1;
     const px = Math.max(1, Math.round(scale * dpr));
     const size = SPRITE_SIZE * px;
     canvas.width = canvas.height = size;
@@ -44,7 +58,8 @@
     };
 
     draw(frames[0]);
-    if (!playing || prefersReducedMotion() || (frames.length < 2 && !blink)) return;
+    const visible = onScreen && !pageHidden;
+    if (!playing || !visible || prefersReducedMotion() || (frames.length < 2 && !blink)) return;
 
     const start = performance.now();
     let shown = frames[0];
@@ -66,6 +81,8 @@
     return () => cancelAnimationFrame(raf);
   });
 </script>
+
+<svelte:document onvisibilitychange={() => (pageHidden = document.hidden)} />
 
 <canvas
   bind:this={canvas}

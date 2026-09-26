@@ -50,8 +50,9 @@
       error = result.reason;
       held = [];
     } else {
+      // Send it even when it matches `value`: the shown shortcut may not be the one
+      // registered (another app took it at login), and a retry re-registers or explains why not.
       stop();
-      if (result.accelerator === value) return;
       saving = true;
       error = await onchange(result.accelerator);
       saving = false;

@@ -4,7 +4,7 @@
   import type { UnlistenFn } from '@tauri-apps/api/event';
   import { getPet } from '$pets';
   import { onSettingsChanged, onSettingsNavigate, onStats } from '$lib/events';
-  import { ipc, loadState, updateSettings } from '$lib/ipc';
+  import { updateSettings, type AppInfo } from '$lib/ipc';
   import { DEFAULT_SETTINGS, SECTIONS, type Platform, type SettingSection, type Settings } from '$lib/settings';
   import type { StatsMap } from '$lib/stats';
   import Sprite from '$lib/ui/Sprite.svelte';
@@ -15,12 +15,25 @@
   import { searchRows, sectionRows } from './rows';
   import type { UpdateOptions } from './types';
 
+  interface Props {
+    /** Stored state, loaded before mounting (see main.ts); null if it couldn't be read. */
+    initial: { settings: Settings; stats: StatsMap } | null;
+    /** Why `initial` is null. */
+    loadError?: string;
+    info: AppInfo | null;
+  }
+
+  // The props only seed the window's state; later changes arrive as events.
+  const props: Props = $props();
+  // svelte-ignore state_referenced_locally
+  const { initial, loadError, info } = props;
+
   const isSection = (value: unknown): value is SettingSection => SECTIONS.some((s) => s.id === value);
 
-  let settings = $state<Settings>({ ...DEFAULT_SETTINGS });
-  let stats = $state<StatsMap>({});
-  let platform = $state<Platform>(navigator.userAgent.includes('Mac') ? 'macos' : 'windows');
-  let version = $state('');
+  let settings = $state<Settings>(initial?.settings ?? { ...DEFAULT_SETTINGS });
+  let stats = $state<StatsMap>(initial?.stats ?? {});
+  const platform: Platform = info?.platform ?? (navigator.userAgent.includes('Mac') ? 'macos' : 'windows');
+  const version = info?.version ?? '';
   let section = $state<SettingSection>(
     ((s) => (isSection(s) ? s : 'buddy'))(new URLSearchParams(location.search).get('section')),
   );
@@ -108,20 +121,7 @@
       onStats((next) => (stats = next)),
       onSettingsNavigate(navigate),
     ];
-
-    loadState()
-      .then((state) => {
-        if (inFlight === 0) settings = state.settings;
-        stats = state.stats;
-      })
-      .catch((err) => showToast(`Couldn’t load your settings: ${err}`));
-    ipc
-      .appInfo()
-      .then((info) => {
-        platform = info.platform;
-        version = info.version;
-      })
-      .catch(() => {});
+    if (loadError) showToast(`Couldn’t load your settings: ${loadError}`);
 
     return () => {
       clearTimeout(toastTimer);

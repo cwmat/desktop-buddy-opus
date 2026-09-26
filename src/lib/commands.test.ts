@@ -119,7 +119,8 @@ describe('buildCommands', () => {
     const { deps, byId } = setup({ paletteHotkey: 'Alt+Shift+B' });
     const cmd = byId('setting:paletteHotkey');
     expect(cmd.title).toBe('Change command palette hotkey…');
-    expect(cmd.hint).toBe('Alt+Shift+B');
+    expect(cmd.hint).toBe('Alt + Shift + B');
+    expect(setup({ paletteHotkey: 'CommandOrControl+Shift+P' }).byId('setting:paletteHotkey').hint).toBe('Ctrl + Shift + P');
     await cmd.run();
     expect(deps.openSettings).toHaveBeenLastCalledWith('system');
   });

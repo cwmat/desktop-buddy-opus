@@ -1,6 +1,6 @@
 <!-- The right-hand control for one SETTING_DEFS entry. -->
 <script lang="ts">
-  import type { Platform, SettingDef, Settings } from '$lib/settings';
+  import type { Platform, RangeDef, SettingDef, Settings } from '$lib/settings';
   import HotkeyInput from '$lib/ui/HotkeyInput.svelte';
   import Segmented from '$lib/ui/Segmented.svelte';
   import Slider from '$lib/ui/Slider.svelte';
@@ -15,6 +15,9 @@
   }
 
   let { def, settings, platform, onupdate }: Props = $props();
+
+  /** Ranges the pet previews while the slider moves; the rest are saved once, on release. */
+  const LIVE_RANGES: readonly RangeDef['key'][] = ['size', 'opacity'];
 </script>
 
 {#if def.kind === 'toggle'}
@@ -34,6 +37,7 @@
     step={def.step}
     format={def.format}
     label={def.label}
+    live={LIVE_RANGES.includes(def.key)}
     onchange={(v) => onupdate({ [def.key]: v })}
   />
 {:else if def.kind === 'hotkey'}

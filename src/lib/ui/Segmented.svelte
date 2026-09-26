@@ -34,6 +34,11 @@
     };
   });
 
+  // Re-picking the current option would still be a settings write; skip it.
+  function pick(next: string) {
+    if (next !== value) onchange(next);
+  }
+
   function onkeydown(e: KeyboardEvent, i: number) {
     const last = options.length - 1;
     const next =
@@ -48,7 +53,7 @@
               : -1;
     if (next === -1) return;
     e.preventDefault();
-    onchange(options[next].value);
+    pick(options[next].value);
     buttons[next]?.focus();
   }
 </script>
@@ -63,7 +68,7 @@
       aria-checked={i === selected}
       tabindex={i === selected ? 0 : -1}
       title={option.description}
-      onclick={() => onchange(option.value)}
+      onclick={() => pick(option.value)}
       onkeydown={(e) => onkeydown(e, i)}
     >
       {option.label}

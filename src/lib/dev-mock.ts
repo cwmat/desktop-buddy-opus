@@ -33,7 +33,7 @@ function sampleStats(): StatsMap {
 }
 
 export function installDevMock(label: 'settings' | 'palette'): void {
-  let settings: Settings = { ...DEFAULT_SETTINGS, home: { x: 1700, y: 1040 } };
+  let settings: Settings = { ...DEFAULT_SETTINGS, home: { x: 1700, y: 1040, ground: true } };
   let stats = sampleStats();
   const info: AppInfo = { platform: 'windows', version: '0.1.0-dev' };
 
@@ -56,6 +56,10 @@ export function installDevMock(label: 'settings' | 'palette'): void {
         }
         case 'app_info':
           return info;
+        case 'hide_palette':
+          // There's no hotkey in a browser: "press" it again shortly so the panel comes back.
+          setTimeout(() => void emit(EVENTS.paletteOpened), 800);
+          return null;
         default:
           // Window plugin calls (setTheme, onFocusChanged…) and fire-and-forget commands.
           console.debug('[dev-mock]', cmd, args);
@@ -79,5 +83,7 @@ export function installDevMock(label: 'settings' | 'palette'): void {
   if (label === 'palette') {
     // The real window is transparent over the desktop; fake a wallpaper behind it.
     document.documentElement.style.background = 'linear-gradient(135deg, #3a4a7a, #6f4a7d 55%, #c0786a)';
+    // Rust shows the palette on the hotkey; here it's "shown" once the app has mounted.
+    setTimeout(() => void emit(EVENTS.paletteOpened), 100);
   }
 }

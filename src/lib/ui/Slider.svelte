@@ -6,12 +6,32 @@
     step: number;
     label: string;
     format: (value: number) => string;
+    /**
+     * Report every step while dragging, for settings that preview live (size, opacity).
+     * Otherwise only the value the thumb is released on is reported: each report is a write.
+     */
+    live?: boolean;
     onchange: (value: number) => void;
   }
 
-  let { value, min, max, step, label, format, onchange }: Props = $props();
+  let { value, min, max, step, label, format, live = true, onchange }: Props = $props();
 
-  const fill = $derived(`${((value - min) / (max - min)) * 100}%`);
+  /** Where the thumb is while a non-live slider is being dragged. */
+  let pending = $state<number | null>(null);
+  const shown = $derived(pending ?? value);
+  const fill = $derived(`${((shown - min) / (max - min)) * 100}%`);
+
+  function oninput(next: number) {
+    if (live) onchange(next);
+    // Back where it started means no `change` event on release: nothing is pending then.
+    else pending = next === value ? null : next;
+  }
+
+  function commit(next: number) {
+    if (live) return;
+    pending = null;
+    if (next !== value) onchange(next);
+  }
 </script>
 
 <div class="slider">
@@ -22,11 +42,12 @@
     {step}
     {value}
     aria-label={label}
-    aria-valuetext={format(value)}
+    aria-valuetext={format(shown)}
     style:--fill={fill}
-    oninput={(e) => onchange(Number(e.currentTarget.value))}
+    oninput={(e) => oninput(Number(e.currentTarget.value))}
+    onchange={(e) => commit(Number(e.currentTarget.value))}
   />
-  <output>{format(value)}</output>
+  <output>{format(shown)}</output>
 </div>
 
 <style>
