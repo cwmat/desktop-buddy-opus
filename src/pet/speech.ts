@@ -112,7 +112,11 @@ export class Chatter {
     if (now >= this.nextMood) {
       this.nextMood = now + this.gap(MOOD_GAP) * MOOD_SCALE[this.level];
       const nudge = this.moodNudge();
-      if (nudge) return nudge;
+      if (nudge) {
+        // Both timers may be due at once (e.g. after a nap): let the nudge be read first.
+        this.nextIdle = Math.max(this.nextIdle, now + 20_000);
+        return nudge;
+      }
     }
     if (now >= this.nextIdle) {
       this.nextIdle = now + this.gap(IDLE_GAP[this.level]);

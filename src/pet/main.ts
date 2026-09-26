@@ -9,14 +9,14 @@
 import '@fontsource/pixelify-sans/500.css';
 import '@fontsource/pixelify-sans/700.css';
 import './pet.css';
-import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window';
+import { cursorPosition } from '@tauri-apps/api/window';
 import { onPetAction, onSettingsChanged, type PetAction } from '$lib/events';
 import { ipc, loadState, updateSettings } from '$lib/ipc';
-import { SIZE_RANGE, normalizeSettings, type Settings } from '$lib/settings';
+import { SIZE_RANGE, normalizeSettings, type Home, type Settings } from '$lib/settings';
 import { PETS, getPet, type PetDefinition } from '$pets';
-import { Brain, type BrainConfig, type BrainEvent, type Pose } from './brain';
+import { Brain, type Activity, type BrainConfig, type BrainEvent, type Pose } from './brain';
 import { Effects } from './effects';
-import { clamp, contains, defaultHome, monitorAt, right, type Point } from './geometry';
+import { aboveFeet, clamp, contains, defaultHome, groundHome, monitorAt, right, type Point } from './geometry';
 import { Input } from './input';
 import { showPetMenu } from './menu';
 import { Needs } from './needs';
@@ -26,7 +26,6 @@ import { Stage, computeLayout, type Layout } from './stage';
 import { World } from './world';
 
 const KEEP_ON_TOP_MS = 3000;
-const PERCH_HOLD_AFTER_MENU_MS = 8000;
 const warn = (what: string) => (e: unknown) => console.warn(`[pet] ${what} failed`, e);
 
 // --- DOM ---------------------------------------------------------------------
@@ -56,22 +55,36 @@ ipc.registerPets(PETS.map(({ id, name }) => ({ id, name }))).catch(warn('registe
 const world = new World();
 await world.refreshMonitors();
 
-let layout: Layout = computeLayout(settings.size, await getCurrentWindow().scaleFactor());
+const onScreen = (p: Point) => world.monitors.some((m) => contains(m.bounds, p, 2));
+
+/** Optimistically adopt a new home, then persist it (Rust broadcasts it back). */
+function setHome(home: Home): void {
+  settings = { ...settings, home };
+  updateSettings({ home }).catch(warn('saving home'));
+}
+
+/**
+ * Fit home to the current monitors: a home on a monitor that went away moves to the
+ * default, and a ground home follows the taskbar edge. Returns true if it changed.
+ */
+function settleHome(): boolean {
+  const home = settings.home;
+  const next = home && onScreen(home) ? groundHome(home, world.monitors) : defaultHome(world.monitors);
+  if (home && next.x === home.x && next.y === home.y && next.ground === home.ground) return false;
+  setHome(next);
+  return true;
+}
+
+settleHome();
+const start = settings.home ?? defaultHome(world.monitors);
+
+// Sized for the monitor the pet starts on (the window moves there before it is shown).
+let layout: Layout = computeLayout(settings.size, monitorAt(world.monitors, aboveFeet(start)).scale);
 const stage = new Stage(layout);
 const renderer = new Renderer(canvas);
 const effects = new Effects(fxLayer);
 const needs = new Needs(saved.stats, pet.id, settings.needs);
 const chatter = new Chatter(Math.random, pet.lines);
-
-const onScreen = (p: Point) => world.monitors.some((m) => contains(m.bounds, p, 2));
-
-/** Optimistically adopt a new home, then persist it (Rust broadcasts it back). */
-function setHome(home: Point): void {
-  settings = { ...settings, home };
-  updateSettings({ home }).catch(warn('saving home'));
-}
-
-if (!settings.home || !onScreen(settings.home)) setHome(defaultHome(world.monitors));
 
 function brainConfig(): BrainConfig {
   return {
@@ -91,7 +104,7 @@ function brainConfig(): BrainConfig {
 
 const brain = new Brain({
   config: brainConfig(),
-  start: settings.home ?? defaultHome(world.monitors),
+  start,
   monitors: world.monitors,
   now: performance.now(),
 });
@@ -168,7 +181,6 @@ function handle(e: BrainEvent): void {
     case 'home-changed':
       setHome(e.home);
       break;
-    case 'hop':
     case 'arrived-home':
       break;
   }
@@ -210,7 +222,7 @@ function act(action: PetAction): void {
 function applySettings(next: Settings): void {
   const prev = settings;
   settings = next;
-  if (!next.home || !onScreen(next.home)) setHome(defaultHome(world.monitors));
+  settleHome();
 
   const nextPet = getPet(next.petId);
   if (nextPet.id !== (pendingPet ?? pet).id) swapPet(nextPet);
@@ -224,9 +236,8 @@ function applySettings(next: Settings): void {
 
 function swapPet(next: PetDefinition): void {
   pendingPet = next;
-  // Poof, and swap sprites while hidden (see the 'poof' event). No poof mid-drag or while paused.
-  if (input.dragging || suppressed) applyPet(next);
-  else brain.poofInPlace('swap');
+  // Poof, and swap sprites while hidden (see the 'poof' event). No poof mid-drag, mid-air or while paused.
+  if (input.dragging || suppressed || !brain.poofInPlace('swap')) applyPet(next);
 }
 
 function applyPet(next: PetDefinition): void {
@@ -269,8 +280,6 @@ let menuOpen = false;
 async function openMenu(): Promise<void> {
   if (menuOpen) return;
   menuOpen = true;
-  // The menu (and our window, afterwards) takes the foreground; keep perches steady meanwhile.
-  world.holdForeground(60_000);
   try {
     // No setFocus() needed even though the overlay is unfocusable: the native popup
     // brings its owner to the front itself (allowed, since we just got the click).
@@ -284,17 +293,50 @@ async function openMenu(): Promise<void> {
     warn('context menu')(e);
   } finally {
     menuOpen = false;
-    world.holdForeground(PERCH_HOLD_AFTER_MENU_MS);
+    // The popup made the pet window the active one: give the keyboard back to the user's app.
+    ipc.restoreForeground().catch(() => {});
   }
 }
 
 // --- Frame loop --------------------------------------------------------------
+//
+// The pet runs all day, so it should cost next to nothing while nothing happens: display
+// rate only while something moves or the cursor is close, otherwise a calm ~10 Hz.
+
+/** Activities with nothing quick on screen (their animations run at 1-3 fps). */
+const CALM = new Set<Activity>(['idle', 'sit', 'sleep', 'waking']);
+const CALM_FRAME_MS = 80;
+/** Cursor polling near the pet: hover hit-testing must keep up so clicks never fall through. */
+const CURSOR_NEAR_MS = 33;
+/** Elsewhere: just often enough to see the cursor coming. */
+const CURSOR_FAR_MS = 150;
 
 let pose: Pose | null = null;
 let lastTime = performance.now();
 let lastFrameAt = 0;
 
+/** Hover hit-testing (unless click-through) and cursor awareness need the cursor. */
+const needCursor = () => !suppressed && (!settings.clickThrough || settings.cursorAwareness);
+
+/** On or carrying the pet, or within about a window's size of its window. */
+function cursorNear(): boolean {
+  if (input.hovered || input.dragging) return true;
+  const c = world.cursor;
+  if (!c || !needCursor()) return false;
+  const { width, height } = stage.layout;
+  return contains({ ...stage.position, width, height }, c, width);
+}
+
+/** Worth drawing at display rate: something moves quickly, or the cursor is close. */
+function busy(): boolean {
+  if (suppressed) return false;
+  if (menuOpen || cursorNear()) return true;
+  return !!pose && !(CALM.has(pose.activity) && pose.squash === 0 && !pose.shake);
+}
+
 function frame(now: number): void {
+  // rAF and the keep-alive timer take their timestamps differently: keep time monotonic.
+  now = Math.max(now, lastTime);
   const dt = clamp((now - lastTime) / 1000, 0, 0.1);
   lastTime = now;
   lastFrameAt = now;
@@ -302,12 +344,11 @@ function frame(now: number): void {
   const wasSuppressed = suppressed;
   // Only step aside when the fullscreen app is on *our* monitor.
   const fullscreen = world.env.fullscreenMonitor;
-  suppressed = settings.hideInFullscreen && !!fullscreen && contains(fullscreen, brain.position);
+  suppressed = settings.hideInFullscreen && !!fullscreen && contains(fullscreen, aboveFeet(brain.position));
   if (suppressed !== wasSuppressed) updateOpacity();
 
-  // ~30 Hz for hover hit-testing and cursor awareness, every frame while carrying.
-  const needCursor = !suppressed && (!settings.clickThrough || settings.cursorAwareness);
-  world.pollCursor(now, input.dragging ? 0 : needCursor ? 33 : 250);
+  if (input.dragging) world.pollCursor(now, 0);
+  else if (needCursor()) world.pollCursor(now, cursorNear() ? CURSOR_NEAR_MS : CURSOR_FAR_MS);
   input.update(now, world.cursor, settings.clickThrough || suppressed);
 
   // Paused while fullscreen or while the menu is open (the pet waits for your choice).
@@ -321,7 +362,7 @@ function frame(now: number): void {
   }
   if (pose) {
     renderer.draw(pose, now);
-    const work = monitorAt(world.monitors, pose).work;
+    const work = monitorAt(world.monitors, aboveFeet(pose)).work;
     const bounds = {
       left: (work.x - stage.position.x) / layout.scale,
       right: (right(work) - stage.position.x) / layout.scale,
@@ -334,8 +375,14 @@ function frame(now: number): void {
 }
 
 function loop(now: number): void {
-  frame(now);
-  requestAnimationFrame(loop);
+  try {
+    frame(now);
+  } finally {
+    // Always ask for the next frame, so an exception in this one cannot stop the pet. Paced
+    // by the pose just computed, so a hop that starts now gets display rate from its start.
+    if (busy()) requestAnimationFrame(loop);
+    else setTimeout(() => requestAnimationFrame(loop), CALM_FRAME_MS);
+  }
 }
 
 // --- Start -------------------------------------------------------------------
@@ -347,8 +394,24 @@ effects.setLayout(layout);
 updateOpacity();
 stage.setIgnoreCursor(true);
 stage.setAlwaysOnTop(settings.alwaysOnTop);
+world.onMonitorsChanged = () => {
+  // A monitor went away with our home on it, or the taskbar moved under a ground home.
+  const lost = !settings.home || !onScreen(settings.home);
+  if (!settleHome()) return;
+  brain.setMonitors(world.monitors);
+  brain.setConfig(brainConfig());
+  if (lost) brain.goHome();
+};
+// Listen before the first move: landing on a monitor with another scale fires this.
+await stage.win.onScaleChanged(({ payload }) => {
+  void world.refreshMonitors();
+  void relayout(payload.scaleFactor);
+});
 await stage.resize(layout).catch(warn('setSize'));
 await stage.place(brain.position);
+// In case the window ended up on another monitor than planned.
+const windowScale = await stage.win.scaleFactor().catch(() => layout.scale);
+if (windowScale !== layout.scale) await relayout(windowScale);
 brain.appear();
 frame(performance.now());
 await stage.win.show();
@@ -360,20 +423,9 @@ setInterval(() => {
 }, 250);
 
 world.start();
-world.onMonitorsChanged = () => {
-  // A monitor went away with our home on it: move in somewhere that exists.
-  if (settings.home && onScreen(settings.home)) return;
-  setHome(defaultHome(world.monitors));
-  brain.setConfig(brainConfig());
-  brain.goHome();
-};
 
 await onSettingsChanged(applySettings);
 await onPetAction(act);
-await stage.win.onScaleChanged(({ payload }) => {
-  void world.refreshMonitors();
-  void relayout(payload.scaleFactor);
-});
 
 setInterval(() => {
   // Windows can drop topmost windows below the taskbar; re-assert now and then.

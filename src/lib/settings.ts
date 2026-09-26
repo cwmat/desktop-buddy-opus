@@ -18,6 +18,15 @@ export interface ScreenPoint {
   y: number;
 }
 
+/**
+ * The buddy's home: its feet anchor. `ground` homes sit on the taskbar edge and follow
+ * it when the work area changes (auto-hide, display scaling, docking); other homes are
+ * spots the user placed it at and keep their exact y.
+ */
+export interface Home extends ScreenPoint {
+  ground: boolean;
+}
+
 export interface Settings {
   /** Active buddy id (see src/pets). */
   petId: string;
@@ -45,7 +54,7 @@ export interface Settings {
    * Where the buddy lives: its feet anchor (bottom-centre of the sprite) in physical px.
    * `null` means "not placed yet" — the pet window picks a spot near the taskbar.
    */
-  home: ScreenPoint | null;
+  home: Home | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -350,11 +359,11 @@ function bool(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
-function point(value: unknown): ScreenPoint | null {
+function home(value: unknown): Home | null {
   if (!isRecord(value)) return null;
-  const { x, y } = value;
+  const { x, y, ground } = value;
   return typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y)
-    ? { x: Math.round(x), y: Math.round(y) }
+    ? { x: Math.round(x), y: Math.round(y), ground: ground === true }
     : null;
 }
 
@@ -383,6 +392,6 @@ export function normalizeSettings(raw: unknown): Settings {
     paletteHotkey:
       typeof r.paletteHotkey === 'string' && r.paletteHotkey.trim() ? r.paletteHotkey : d.paletteHotkey,
     theme: pickOption(r.theme, ['system', 'light', 'dark'], d.theme),
-    home: point(r.home),
+    home: home(r.home),
   };
 }

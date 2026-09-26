@@ -68,8 +68,9 @@ export class Stage {
     };
     const target = this.wanted ?? this.position;
     if (!(this.placed && next.x === target.x && next.y === target.y)) this.wanted = next;
-    this.flushing ??= this.flush().finally(() => (this.flushing = null));
-    return this.flushing;
+    // Called every frame: only start a flush when there is something to send.
+    if (this.wanted) this.flushing ??= this.flush().finally(() => (this.flushing = null));
+    return this.flushing ?? Promise.resolve();
   }
 
   /** Forget where we think the window is (e.g. after a DPI change moved it). */

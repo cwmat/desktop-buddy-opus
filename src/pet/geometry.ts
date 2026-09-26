@@ -3,6 +3,7 @@
  * desktop. No Tauri imports so the brain (and its tests) can use it.
  */
 import type { ScreenRect } from '$lib/ipc';
+import type { Home } from '$lib/settings';
 
 export interface Point {
   x: number;
@@ -31,6 +32,12 @@ export function contains(r: Rect, p: Point, slack = 0): boolean {
   return p.x >= r.x - slack && p.x <= right(r) + slack && p.y >= r.y - slack && p.y <= bottom(r) + slack;
 }
 
+/**
+ * A hair above the feet. Edges are inclusive, so look here to find the monitor a pet
+ * stands on: one on a monitor's bottom edge belongs to it, not to the monitor below.
+ */
+export const aboveFeet = (feet: Point): Point => ({ x: feet.x, y: feet.y - 1 });
+
 /** The monitor whose bounds contain `p`, else the closest one. */
 export function monitorAt(monitors: readonly MonitorArea[], p: Point): MonitorArea {
   const hit = monitors.find((m) => contains(m.bounds, p));
@@ -50,7 +57,18 @@ export function monitorAt(monitors: readonly MonitorArea[], p: Point): MonitorAr
 }
 
 /** Default home: on the taskbar of the primary monitor, ~85% of the way across. */
-export function defaultHome(monitors: readonly MonitorArea[]): Point {
+export function defaultHome(monitors: readonly MonitorArea[]): Home {
   const m = monitors.find((mon) => mon.primary) ?? monitors[0];
-  return { x: Math.round(m.work.x + m.work.width * 0.85), y: bottom(m.work) };
+  return { x: Math.round(m.work.x + m.work.width * 0.85), y: bottom(m.work), ground: true };
+}
+
+/**
+ * `home` for the current monitors: a ground home moves with the bottom of its monitor's
+ * work area (the taskbar auto-hides, changes height with display scaling, ...). A home
+ * right on the ground counts as one too (homes saved before the flag existed).
+ */
+export function groundHome(home: Home, monitors: readonly MonitorArea[]): Home {
+  const ground = bottom(monitorAt(monitors, aboveFeet(home)).work);
+  if (!home.ground && Math.abs(home.y - ground) > 1) return home;
+  return { x: home.x, y: ground, ground: true };
 }

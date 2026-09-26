@@ -21,7 +21,6 @@ export class World {
 
   private cursorBusy = false;
   private lastCursorPoll = -Infinity;
-  private holdForegroundUntil = 0;
 
   start(): void {
     void this.pollEnv();
@@ -42,14 +41,6 @@ export class World {
     }
   }
 
-  /**
-   * For a while, treat "no foreground window" as "unchanged". Our own windows (like the
-   * context menu) count as none, and must not knock the pet off the window it sits on.
-   */
-  holdForeground(ms: number): void {
-    this.holdForegroundUntil = performance.now() + ms;
-  }
-
   /** Call every frame; requests a fresh cursor position at most every `everyMs`. */
   pollCursor(now: number, everyMs: number): void {
     if (this.cursorBusy || now - this.lastCursorPoll < everyMs) return;
@@ -63,9 +54,7 @@ export class World {
 
   private async pollEnv(): Promise<void> {
     try {
-      const env = await ipc.environment();
-      const held = !env.foregroundWindow && performance.now() < this.holdForegroundUntil;
-      this.env = held ? { ...env, foregroundWindow: this.env.foregroundWindow } : env;
+      this.env = await ipc.environment();
     } catch {
       // Unsupported or transient: keep the last snapshot.
     }

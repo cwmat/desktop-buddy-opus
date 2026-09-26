@@ -8,11 +8,12 @@
  *
  * All positions are the pet's FEET anchor (bottom-centre of the sprite) in physical px.
  */
-import type { EnvironmentSnapshot } from '$lib/ipc';
-import type { MovementMode, RoamSpeed } from '$lib/settings';
+import type { EnvironmentSnapshot, ForegroundWindow } from '$lib/ipc';
+import type { Home, MovementMode, RoamSpeed } from '$lib/settings';
 import type { Mood } from '$lib/stats';
 import { SPRITE_SIZE, type AnimationName } from '$pets/types';
 import {
+  aboveFeet,
   bottom,
   clamp,
   distance,
@@ -34,7 +35,7 @@ export interface BrainConfig {
   cursorAwareness: boolean;
   /** Current mood, or null when needs are switched off. */
   mood: Mood | null;
-  home: Point | null;
+  home: Home | null;
   /** Window scale factor: physical px per logical px. */
   scale: number;
   /** Physical px per sprite pixel. */
@@ -74,7 +75,6 @@ export type BrainEvent =
   | { type: 'patted' }
   | { type: 'dizzy' }
   | { type: 'celebrate' }
-  | { type: 'hop' }
   /** A treat starts falling; it reaches the mouth after `ms`. */
   | { type: 'treat-incoming'; ms: number }
   | { type: 'eat-start'; ms: number }
@@ -85,7 +85,7 @@ export type BrainEvent =
   | { type: 'notice' }
   | { type: 'drag-start' }
   | { type: 'poof'; phase: 'out' | 'in'; tag?: string }
-  | { type: 'home-changed'; home: Point }
+  | { type: 'home-changed'; home: Home }
   | { type: 'arrived-home' };
 
 export interface Pose {
@@ -112,7 +112,7 @@ export interface BrainOutput extends Pose {
   events: BrainEvent[];
 }
 
-type Surface = { kind: 'ground' } | { kind: 'spot' } | { kind: 'perch'; rect: Rect };
+type Surface = { kind: 'ground' } | { kind: 'spot' } | { kind: 'perch'; rect: ForegroundWindow };
 type WalkThen = 'pause' | 'decide' | 'perch';
 
 interface Goal {
@@ -139,7 +139,7 @@ interface Fall {
   vy: number;
   /** Ignore window tops (hopping down off one). */
   ignorePerch: boolean;
-  /** Dropped by the user: wherever it lands becomes home. */
+  /** Dropped by the user: wherever it lands on the ground becomes home. */
   fromDrop: boolean;
 }
 
@@ -166,6 +166,7 @@ const POOF_IN = 0.3;
 const FORCED_NAP_MS = 10 * 60_000;
 const NO_SLEEP_AFTER_WAKE_MS = 20_000;
 const NOTICE_COOLDOWN_MS = 15_000;
+const HOME_GOAL: Goal = { kind: 'home', walkLimit: 0.6, speedMul: 1.3 };
 
 /** Activities a new plan may cut short right away. */
 const INTERRUPTIBLE = new Set<Activity>(['idle', 'sit', 'walk']);
@@ -204,7 +205,7 @@ export class Brain {
   private jump: Jump | null = null;
   private fall: Fall | null = null;
   private poofPlan: Poof | null = null;
-  private perchPlan: { rect: Rect; x: number } | null = null;
+  private perchPlan: { rect: ForegroundWindow; x: number } | null = null;
   private perchStrolls = 0;
   private fgMissingSince: number | null = null;
 
@@ -256,8 +257,9 @@ export class Brain {
     return RELAXED.has(this.activity);
   }
 
+  /** On a window, or on the way up to one. */
   get perched(): boolean {
-    return this.surface.kind === 'perch' || this.perchPlan !== null;
+    return this.surface.kind === 'perch' || (this.activity === 'walk' && this.walkThen === 'perch');
   }
 
   get position(): Point {
@@ -277,6 +279,11 @@ export class Brain {
     }
   }
 
+  /** The monitor layout changed: use it before the next tick brings it (decisions may come first). */
+  setMonitors(monitors: readonly MonitorArea[]): void {
+    this.world = { ...this.world, monitors };
+  }
+
   tick(input: WorldInput): BrainOutput {
     this.world = input;
     this.now = input.now;
@@ -293,10 +300,14 @@ export class Brain {
     this.poof(this.here(), this.surface, 'appear', true);
   }
 
-  /** Poof in place, e.g. while swapping to another buddy. Watch for poof 'in' with `tag`. */
-  poofInPlace(tag: string): void {
-    if (this.activity === 'drag') return;
+  /**
+   * Poof in place, e.g. while swapping to another buddy. Watch for poof 'in' with `tag`.
+   * Returns false (and does nothing) while carried or mid-air.
+   */
+  poofInPlace(tag: string): boolean {
+    if (this.activity === 'drag' || this.activity === 'jump' || this.activity === 'fall') return false;
     this.poof(this.here(), this.surface, tag);
+    return true;
   }
 
   /** A click on the buddy: a pat (or a celebration for a double-click), unless it is being poked too much. */
@@ -319,13 +330,15 @@ export class Brain {
     if (this.activity === 'drag' || AIRBORNE.has(this.activity)) return;
     if (this.activity === 'sleep') this.emit({ type: 'woke', grumpy: false });
     this.emit({ type: 'celebrate' });
+    // Busy with a treat: sparkles only, the meal goes on.
+    if (this.eating()) return;
     this.jumpTo(this.here(), this.surface, 'happy', 12 * this.cfg.px);
   }
 
   /** Give a treat. Returns false if it was ignored (while dragging). */
   treat(): boolean {
     if (this.activity === 'drag') return false;
-    if (AIRBORNE.has(this.activity) || this.activity === 'catch' || this.activity === 'eat') {
+    if (AIRBORNE.has(this.activity) || this.eating()) {
       this.pendingTreats = Math.min(3, this.pendingTreats + 1);
       return true;
     }
@@ -349,7 +362,7 @@ export class Brain {
 
   goHome(): void {
     if (!this.cfg.home) return;
-    this.goal = { kind: 'home', walkLimit: 0.6, speedMul: 1.3 };
+    this.goal = HOME_GOAL;
     this.startGoal();
   }
 
@@ -400,8 +413,9 @@ export class Brain {
     }
     // Placed by hand: no gravity, that spot is home now. Snap onto the taskbar if close.
     const ground = bottom(m.work);
-    if (Math.abs(this.y - ground) <= 4 * this.cfg.px) this.y = ground;
-    const home = { x: Math.round(this.x), y: Math.round(this.y) };
+    const onGround = Math.abs(this.y - ground) <= 4 * this.cfg.px;
+    if (onGround) this.y = ground;
+    const home = { x: Math.round(this.x), y: Math.round(this.y), ground: onGround };
     this.x = home.x;
     this.y = home.y;
     this.surface = this.surfaceAt(home);
@@ -457,7 +471,11 @@ export class Brain {
   private decide(): void {
     if (this.goal) return this.pursueGoal();
     if (this.shouldRoam()) return this.roamStep();
-    if (this.cfg.home && !this.atHome()) return this.goHome();
+    if (this.cfg.home && !this.atHome()) {
+      // Straight to it: goHome() waits for an interruptible activity, and we are between two.
+      this.goal = HOME_GOAL;
+      return this.pursueGoal();
+    }
     this.lounge(4, 12);
   }
 
@@ -492,7 +510,6 @@ export class Brain {
   }
 
   private hop(): void {
-    this.emit({ type: 'hop' });
     this.jumpTo(this.here(), this.surface, 'happy', 6 * this.cfg.px);
   }
 
@@ -547,7 +564,7 @@ export class Brain {
     return { min, max };
   }
 
-  private approachPerch(rect: Rect, range: { min: number; max: number }): void {
+  private approachPerch(rect: ForegroundWindow, range: { min: number; max: number }): void {
     const landX = between(this.rng, range.min, range.max);
     const dir = Math.sign(landX - this.x) || this.facing;
     const run = Math.min(Math.abs(landX - this.x), 60 * this.cfg.scale);
@@ -560,7 +577,7 @@ export class Brain {
     const plan = this.perchPlan;
     this.perchPlan = null;
     const fg = this.foreground();
-    if (!plan || !fg || !sameSize(fg, plan.rect)) return this.lounge(1, 3);
+    if (!plan || !fg || fg.id !== plan.rect.id) return this.lounge(1, 3);
     const range = this.perchRange(fg);
     if (!range) return this.lounge(1, 3);
     this.perchStrolls = 0;
@@ -568,17 +585,17 @@ export class Brain {
     this.jumpTo({ x, y: fg.y }, { kind: 'perch', rect: fg }, 'happy');
   }
 
-  /** Follow the window we stand on; fall if it goes away, changes or leaves range. */
-  private trackPerch(s: { kind: 'perch'; rect: Rect }): void {
+  /** Follow the window we stand on; fall if it goes away, another window takes over, or it leaves range. */
+  private trackPerch(s: { kind: 'perch'; rect: ForegroundWindow }): void {
     const fg = this.foreground();
     if (!fg) {
-      // Our own menu/windows briefly count as "no foreground window" — give it a moment.
+      // Passing shell UI (Alt-Tab, Start) briefly means "no window": give it a moment.
       this.fgMissingSince ??= this.now;
       if (this.now - this.fgMissingSince > PERCH_GRACE_MS) this.dropOffPerch();
       return;
     }
     this.fgMissingSince = null;
-    if (!sameSize(fg, s.rect)) return this.dropOffPerch();
+    if (fg.id !== s.rect.id) return this.dropOffPerch();
     const dx = fg.x - s.rect.x;
     this.x += dx;
     this.walkTarget += dx;
@@ -598,7 +615,7 @@ export class Brain {
     this.startFall(this.facing * 80 * s, -320 * s, { ignorePerch: true });
   }
 
-  private foreground(): Rect | null {
+  private foreground(): ForegroundWindow | null {
     const { env } = this.world;
     return env.fullscreenMonitor ? null : env.foregroundWindow;
   }
@@ -632,7 +649,7 @@ export class Brain {
 
     const here = this.monitor();
     const far =
-      monitorAt(this.world.monitors, target) !== here ||
+      this.monitor(target) !== here ||
       Math.abs(target.x - this.x) > here.work.width * goal.walkLimit ||
       bottom(here.work) - target.y > here.work.height * 0.45;
     if (far || (goal.kind === 'summon' && !this.onGround())) {
@@ -660,12 +677,12 @@ export class Brain {
     this.y = target.y;
     this.surface = this.surfaceAt(target);
     if (goal.kind === 'home') this.emit({ type: 'arrived-home' });
-    else this.setHome(target);
+    else this.setHome({ ...target, ground: this.surface.kind === 'ground' });
     if (this.cfg.movement === 'roam') this.lingerUntil = this.now + between(this.rng, 30, 45) * 1000;
     this.lounge(3, 8);
   }
 
-  private setHome(home: Point): void {
+  private setHome(home: Home): void {
     this.cfg = { ...this.cfg, home };
     this.emit({ type: 'home-changed', home });
   }
@@ -694,7 +711,7 @@ export class Brain {
   }
 
   private dizzy(): void {
-    if (this.activity === 'drag' || AIRBORNE.has(this.activity)) return;
+    if (this.activity === 'drag' || AIRBORNE.has(this.activity) || this.eating()) return;
     this.emit({ type: 'dizzy' });
     this.setActivity('dizzy', 'idle', 1.2, () => this.finish(true));
   }
@@ -813,7 +830,8 @@ export class Brain {
     const impact = clamp(vy / (1800 * this.cfg.scale), 0, 1);
     this.squashBy(1 + Math.round(impact * 2), 220);
     this.emit({ type: 'landed', impact });
-    if (fromDrop) this.setHome({ x: Math.round(this.x), y: Math.round(y) });
+    // Only the ground: a window top is no place to call home (windows move and close).
+    if (fromDrop && surface.kind === 'ground') this.setHome({ x: Math.round(this.x), y: Math.round(y), ground: true });
     this.setActivity('idle', 'idle', 0.35, () => this.finish(fromDrop));
   }
 
@@ -935,9 +953,14 @@ export class Brain {
   private followSurface(): void {
     const s = this.surface;
     if (s.kind === 'ground') {
+      // The ground can shrink under us (bigger sprite, taskbar moved): keep walks reachable too.
       const { min, max } = this.groundRange();
       this.x = clamp(this.x, min, max);
-      this.y = this.groundY();
+      this.walkTarget = clamp(this.walkTarget, min, max);
+      // The taskbar moved (auto-hide, display scaling): a home on the ground moves with it.
+      const y = this.groundY();
+      if (y !== this.y && this.atHome()) this.setHome({ x: this.cfg.home!.x, y, ground: true });
+      this.y = y;
     } else if (s.kind === 'perch') {
       this.trackPerch(s);
     }
@@ -1003,6 +1026,8 @@ export class Brain {
   }
 
   private setActivity(activity: Activity, anim: AnimationName, duration = 0, after: (() => void) | null = null): void {
+    // A treat cut short (a fall, a drag, a poof) is served again once things settle.
+    if (this.eating() && this.after) this.pendingTreats = Math.min(3, this.pendingTreats + 1);
     this.activity = activity;
     this.t = 0;
     this.duration = duration;
@@ -1021,8 +1046,7 @@ export class Brain {
   }
 
   private monitor(p: Point = this.here()): MonitorArea {
-    // Look a hair above the feet so a pet on a monitor's bottom edge belongs to it.
-    return monitorAt(this.world.monitors, { x: p.x, y: p.y - 1 });
+    return monitorAt(this.world.monitors, aboveFeet(p));
   }
 
   private groundY(p: Point = this.here()): number {
@@ -1049,6 +1073,11 @@ export class Brain {
     return Math.abs(p.y - this.groundY(p)) <= 1 ? { kind: 'ground' } : { kind: 'spot' };
   }
 
+  /** Catching or eating a treat. */
+  private eating(): boolean {
+    return this.activity === 'catch' || this.activity === 'eat';
+  }
+
   private spriteSize(): number {
     return SPRITE_SIZE * this.cfg.px;
   }
@@ -1060,8 +1089,4 @@ export class Brain {
 
 function samePoint(a: Point | null, b: Point | null): boolean {
   return a === b || (!!a && !!b && a.x === b.x && a.y === b.y);
-}
-
-function sameSize(a: Rect, b: Rect): boolean {
-  return Math.abs(a.width - b.width) <= 2 && Math.abs(a.height - b.height) <= 2;
 }

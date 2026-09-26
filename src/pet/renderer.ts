@@ -111,7 +111,9 @@ export class Renderer {
     if (!layout || !anim) return;
     const { px, footX, footY } = layout;
 
-    let frameIndex = Math.floor(((now - pose.animStart) / 1000) * anim.fps);
+    // Never negative, even if a frame's timestamp predates the animation's start.
+    const elapsed = Math.max(0, now - pose.animStart);
+    let frameIndex = Math.floor((elapsed / 1000) * anim.fps);
     frameIndex = anim.loop ? frameIndex % anim.frames.length : Math.min(frameIndex, anim.frames.length - 1);
     let frame = anim.frames[frameIndex];
     const blinking = this.blink(pose, now);

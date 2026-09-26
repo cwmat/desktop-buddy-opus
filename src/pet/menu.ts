@@ -23,8 +23,10 @@ let previous: Menu | null = null;
 /** Build and pop up the menu at the cursor. Resolves once the menu has closed. */
 export async function showPetMenu(ctx: MenuContext): Promise<void> {
   const { settings: s, act, update } = ctx;
-  // Stable ids ("pet:*") keep Rust's handler table from growing and stay clear of tray ids.
+  // Stable ids ("pet:*"), the menu's own included, keep Rust's handler table from growing
+  // (a new handler replaces the old one) and stay clear of tray ids.
   const menu = await Menu.new({
+    id: 'pet:menu',
     items: [
       { id: 'pet:treat', text: 'Give a treat', action: () => act({ type: 'treat' }) },
       { id: 'pet:pat', text: 'Pat', action: () => act({ type: 'pat' }) },

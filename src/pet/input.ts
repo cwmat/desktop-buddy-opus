@@ -34,8 +34,12 @@ const WHEEL_STEP_MS = 150;
 
 interface Press {
   id: number;
-  clientX: number;
-  clientY: number;
+  /**
+   * Screen coordinates (CSS px): the pet keeps moving while pressed (walking, hopping), so
+   * client coordinates, relative to the moving window, would count its motion as a drag.
+   */
+  screenX: number;
+  screenY: number;
   at: number;
   /** Cursor offset from the feet anchor, physical px. */
   grab: Point;
@@ -48,9 +52,11 @@ export class Input {
   private press: Press | null = null;
   private samples: { t: number; p: Point }[] = [];
   private lastSample: Point | null = null;
+  /** Screen coordinates, like `Press`. */
   private lastClick = { at: -Infinity, x: 0, y: 0 };
   private lastHit = -Infinity;
   private lastWheel = 0;
+  private cursorStyle = '';
 
   constructor(
     private readonly el: HTMLElement,
@@ -84,7 +90,8 @@ export class Input {
     }
     this.hovered = !passThrough && (this.press !== null || now - this.lastHit < HOVER_GRACE_MS);
     this.stage.setIgnoreCursor(!this.hovered);
-    this.el.style.cursor = this.dragging ? 'grabbing' : this.hovered ? 'grab' : '';
+    const style = this.dragging ? 'grabbing' : this.hovered ? 'grab' : '';
+    if (style !== this.cursorStyle) this.el.style.cursor = this.cursorStyle = style;
   }
 
   private onDown = (e: PointerEvent) => {
@@ -95,8 +102,8 @@ export class Input {
     const { footX, footY } = this.stage.layout;
     this.press = {
       id: e.pointerId,
-      clientX: e.clientX,
-      clientY: e.clientY,
+      screenX: e.screenX,
+      screenY: e.screenY,
       at: performance.now(),
       grab: { x: e.clientX * dpr - footX, y: e.clientY * dpr - footY },
     };
@@ -105,8 +112,7 @@ export class Input {
   private onMove = (e: PointerEvent) => {
     const p = this.press;
     if (!p || this.dragging || e.pointerId !== p.id) return;
-    // The window has not moved yet, so client coordinates are stable here.
-    if (Math.hypot(e.clientX - p.clientX, e.clientY - p.clientY) <= DRAG_THRESHOLD) return;
+    if (Math.hypot(e.screenX - p.screenX, e.screenY - p.screenY) <= DRAG_THRESHOLD) return;
     this.dragging = true;
     this.samples = [];
     this.lastSample = null;
@@ -127,9 +133,9 @@ export class Input {
     if (now - p.at > CLICK_MAX_MS) return;
     const double =
       now - this.lastClick.at < DOUBLE_CLICK_MS &&
-      Math.hypot(e.clientX - this.lastClick.x, e.clientY - this.lastClick.y) < 8;
+      Math.hypot(e.screenX - this.lastClick.x, e.screenY - this.lastClick.y) < 8;
     // A double-click consumes the pair, so a triple-click is double + single.
-    this.lastClick = double ? { at: -Infinity, x: 0, y: 0 } : { at: now, x: e.clientX, y: e.clientY };
+    this.lastClick = double ? { at: -Infinity, x: 0, y: 0 } : { at: now, x: e.screenX, y: e.screenY };
     this.on.click(double);
   };
 
