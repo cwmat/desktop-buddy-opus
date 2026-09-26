@@ -178,6 +178,10 @@ export function validatePet(pet: PetDefinition): string[] {
   for (const key of ['greet', 'idle', 'pat', 'treat', 'hungry'] as const) {
     if (!lines[key]?.length) errors.push(`${pet.id}: lines.${key} is empty`);
   }
+  if (pet.mouth) {
+    const { x, y } = pet.mouth;
+    if (!(x >= 0 && x < SPRITE_SIZE && y >= 0 && y < SPRITE_SIZE)) errors.push(`${pet.id}: mouth is outside the frame`);
+  }
   for (const [key, value] of Object.entries(pet.personality)) {
     if (!(value >= 1 && value <= 10)) errors.push(`${pet.id}: personality.${key} must be 1–10`);
   }

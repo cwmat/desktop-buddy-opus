@@ -14,6 +14,7 @@
     "windows": [
       {
         "label": "pet",
+        "create": false,
         "url": "pet.html",
         "title": "Desktop Buddy",
         "width": 240,
@@ -33,6 +34,7 @@
       },
       {
         "label": "palette",
+        "create": false,
         "url": "palette.html",
         "title": "Desktop Buddy Command Palette",
         "width": 640,

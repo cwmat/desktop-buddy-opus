@@ -1,9 +1,20 @@
-//! Commands invoked from the frontend. Mirror of `src/lib/ipc.ts`.
-//! SKELETON: stubs only — real implementations to follow.
+//! Commands invoked from the frontend. Mirror of `src/lib/ipc.ts` — keep the two in sync.
+//!
+//! Sync commands run on the main thread, which also serializes every settings write
+//! with the tray and hotkey handlers. `open_settings` must stay `async`: creating a
+//! webview from a sync command deadlocks on Windows.
 
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tauri::AppHandle;
+use serde::Serialize;
+use serde_json::Value;
+use tauri::{AppHandle, State};
+
+use crate::{
+    platform::{self, ForegroundWindow, ScreenRect},
+    settings,
+    store::Store,
+    tray::{self, PetSummary},
+    windows,
+};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,30 +25,13 @@ pub struct AppInfo {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScreenRect {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct EnvironmentSnapshot {
     idle_seconds: Option<f64>,
-    foreground_window: Option<ScreenRect>,
-    fullscreen_active: bool,
+    foreground_window: Option<ForegroundWindow>,
+    fullscreen_monitor: Option<ScreenRect>,
 }
 
-#[derive(Deserialize)]
-pub struct PetSummary {
-    #[allow(dead_code)]
-    id: String,
-    #[allow(dead_code)]
-    name: String,
-}
-
-fn platform() -> &'static str {
+fn platform_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows"
     } else if cfg!(target_os = "macos") {
@@ -49,49 +43,72 @@ fn platform() -> &'static str {
 
 #[tauri::command]
 pub fn app_info(app: AppHandle) -> AppInfo {
-    AppInfo { platform: platform(), version: app.package_info().version.to_string() }
+    AppInfo {
+        platform: platform_name(),
+        version: app.package_info().version.to_string(),
+    }
 }
 
 #[tauri::command]
-pub fn load_state() -> Value {
-    json!({ "settings": {}, "stats": {} })
+pub fn load_state(store: State<'_, Store>) -> Value {
+    store.snapshot()
 }
 
 #[tauri::command]
-pub fn update_settings(patch: Value) -> Result<Value, String> {
-    Ok(patch)
+pub fn update_settings(app: AppHandle, patch: Value) -> Result<Value, String> {
+    settings::update(&app, patch)
+}
+
+/// Async so the file write stays off the UI thread; the pet saves stats often.
+#[tauri::command]
+pub async fn save_stats(store: State<'_, Store>, stats: Value) -> Result<(), String> {
+    let Value::Object(stats) = stats else {
+        return Err("Stats must be a JSON object.".into());
+    };
+    store.set_stats(stats);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn save_stats(stats: Value) {
-    let _ = stats;
-}
-
-#[tauri::command]
-pub fn register_pets(pets: Vec<PetSummary>) {
-    let _ = pets;
+pub fn register_pets(app: AppHandle, pets: Vec<PetSummary>) {
+    tray::set_pets(&app, pets);
 }
 
 #[tauri::command]
 pub fn environment_snapshot() -> EnvironmentSnapshot {
-    EnvironmentSnapshot { idle_seconds: None, foreground_window: None, fullscreen_active: false }
+    EnvironmentSnapshot {
+        idle_seconds: platform::idle_seconds(),
+        foreground_window: platform::foreground_window(),
+        fullscreen_monitor: platform::fullscreen_monitor(),
+    }
 }
 
 #[tauri::command]
-pub fn keep_pet_on_top() {}
-
-#[tauri::command]
-pub fn open_settings(section: Option<String>) {
-    let _ = section;
+pub fn keep_pet_on_top(app: AppHandle) {
+    windows::keep_pet_on_top(&app);
 }
 
 #[tauri::command]
-pub fn show_palette() {}
+pub fn restore_foreground(app: AppHandle) {
+    windows::restore_foreground(&app);
+}
 
 #[tauri::command]
-pub fn hide_palette() {}
+pub async fn open_settings(app: AppHandle, section: Option<String>) -> Result<(), String> {
+    windows::open_settings(&app, section.as_deref()).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn show_palette(app: AppHandle) -> Result<(), String> {
+    windows::show_palette(&app).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn hide_palette(app: AppHandle) -> Result<(), String> {
+    windows::hide_palette(&app).map_err(|err| err.to_string())
+}
 
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
-    app.exit(0);
+    crate::quit(&app);
 }

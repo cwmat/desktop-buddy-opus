@@ -81,4 +81,9 @@ export interface PetDefinition {
   lines: PetLines;
   personality: Personality;
   traits?: PetTraits;
+  /**
+   * Where the mouth is, in sprite pixels of the (right-facing) idle pose. Treats and
+   * crumbs aim here. Omit to use a rough guess (front of the head).
+   */
+  mouth?: { x: number; y: number };
 }

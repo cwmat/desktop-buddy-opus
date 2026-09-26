@@ -1,0 +1,294 @@
+/*
+ * Design tokens + base styles shared by the settings and palette windows.
+ * Theme: light by default, dark via prefers-color-scheme unless data-theme="light",
+ * or forced with data-theme="dark" (see theme.ts). Accent comes from the active buddy.
+ */
+
+:root {
+  color-scheme: light;
+
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+  --font-pixel: 'Pixelify Sans', var(--font-ui);
+
+  /* 8px grid (4px for fine-tuning) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Overwritten at runtime from the active buddy (theme.ts). */
+  --accent: #7c5cff;
+  --accent-on-light: #5b3fd6;
+  --accent-on-dark: #b9a8ff;
+
+  /* Light theme */
+  --bg: #f5f5f8;
+  --bg-sidebar: #ececf1;
+  --surface: #ffffff;
+  --surface-2: #f3f3f7;
+  --surface-3: #e7e7ee;
+  --hover: rgb(24 24 40 / 0.05);
+  --pressed: rgb(24 24 40 / 0.09);
+  --border: rgb(24 24 40 / 0.1);
+  --border-strong: rgb(24 24 40 / 0.18);
+  --text: #18181f;
+  --text-2: #565665;
+  --text-3: #858594;
+  --accent-fg: var(--accent-on-light);
+  --on-accent: #ffffff;
+  --danger: #cf2f45;
+  --love: #e2487a;
+  --food: #df8b12;
+  --shadow-sm: 0 1px 2px rgb(20 20 40 / 0.06);
+  --shadow: 0 1px 2px rgb(20 20 40 / 0.05), 0 4px 14px rgb(20 20 40 / 0.07);
+  --shadow-lg: 0 2px 6px rgb(20 20 40 / 0.08), 0 18px 44px rgb(20 20 40 / 0.2);
+
+  /* Derived (resolved per theme because they reference the tokens above) */
+  --accent-soft: color-mix(in srgb, var(--accent-fg) 12%, transparent);
+  --accent-softer: color-mix(in srgb, var(--accent-fg) 6%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 40%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #131317;
+    --bg-sidebar: #18181d;
+    --surface: #1d1d23;
+    --surface-2: #24242b;
+    --surface-3: #2e2e36;
+    --hover: rgb(255 255 255 / 0.05);
+    --pressed: rgb(255 255 255 / 0.09);
+    --border: rgb(255 255 255 / 0.08);
+    --border-strong: rgb(255 255 255 / 0.15);
+    --text: #ededf2;
+    --text-2: #a5a5b4;
+    --text-3: #72727f;
+    --accent-fg: var(--accent-on-dark);
+    --on-accent: #131317;
+    --danger: #ff6b7d;
+    --love: #ff7aa0;
+    --food: #f6b547;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 6px 16px rgb(0 0 0 / 0.25);
+    --shadow-lg: 0 2px 8px rgb(0 0 0 / 0.35), 0 20px 48px rgb(0 0 0 / 0.5);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #131317;
+  --bg-sidebar: #18181d;
+  --surface: #1d1d23;
+  --surface-2: #24242b;
+  --surface-3: #2e2e36;
+  --hover: rgb(255 255 255 / 0.05);
+  --pressed: rgb(255 255 255 / 0.09);
+  --border: rgb(255 255 255 / 0.08);
+  --border-strong: rgb(255 255 255 / 0.15);
+  --text: #ededf2;
+  --text-2: #a5a5b4;
+  --text-3: #72727f;
+  --accent-fg: var(--accent-on-dark);
+  --on-accent: #131317;
+  --danger: #ff6b7d;
+  --love: #ff7aa0;
+  --food: #f6b547;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 6px 16px rgb(0 0 0 / 0.25);
+  --shadow-lg: 0 2px 8px rgb(0 0 0 / 0.35), 0 20px 48px rgb(0 0 0 / 0.5);
+}
+
+/*
+ * Local accents (e.g. each buddy card in its own color): set --tint-on-light and
+ * --tint-on-dark inline (from accentShades) and use var(--tint).
+ */
+.tint {
+  --tint: var(--tint-on-light);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .tint {
+    --tint: var(--tint-on-dark);
+  }
+}
+:root[data-theme='dark'] .tint {
+  --tint: var(--tint-on-dark);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Base                                                                     */
+/* ------------------------------------------------------------------------ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font: 14px/1.45 var(--font-ui);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  /* Feels like a native app: no accidental text selection in chrome. */
+  user-select: none;
+  cursor: default;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-fg);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.pixel {
+  font-family: var(--font-pixel);
+  letter-spacing: 0.01em;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Thin, quiet scrollbars (Chromium/WebView2). */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 4px solid transparent;
+  border-radius: var(--radius-pill);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-3);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Shared bits                                                              */
+/* ------------------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.btn:hover {
+  background: color-mix(in srgb, var(--surface) 92%, var(--text));
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn.primary {
+  border-color: transparent;
+  background: var(--accent-fg);
+  color: var(--on-accent);
+}
+.btn.primary:hover {
+  background: color-mix(in srgb, var(--accent-fg) 88%, var(--text));
+}
+.btn.danger {
+  color: var(--danger);
+}
+.btn.danger:hover {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--danger-soft);
+}
+.btn.small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.btn svg {
+  flex: none;
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

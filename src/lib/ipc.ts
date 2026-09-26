@@ -14,17 +14,28 @@ export interface ScreenRect {
   height: number;
 }
 
+/** An app window the pet may perch on. `id` tells windows of the same size apart. */
+export interface ForegroundWindow extends ScreenRect {
+  id: number;
+}
+
 /** Things the pet window polls (~2×/s) to decide what to do. */
 export interface EnvironmentSnapshot {
   /** Seconds since the last keyboard/mouse input anywhere, or null if unsupported. */
   idleSeconds: number | null;
   /**
-   * Bounds of the foreground app window (excluding our own windows, the desktop,
-   * the taskbar, minimized and maximized windows). null if none or unsupported.
+   * The app window the user is working in (excluding minimized and maximized windows).
+   * While one of our own windows or a taskbar is in front, this is still the last such
+   * app window, so a perched pet doesn't fall off when the user opens the palette or
+   * tray. The desktop ("Show desktop") counts as nothing to perch on. null if none or
+   * unsupported.
    */
-  foregroundWindow: ScreenRect | null;
-  /** A fullscreen game/video/presentation is in front. Always false where unsupported. */
-  fullscreenActive: boolean;
+  foregroundWindow: ForegroundWindow | null;
+  /**
+   * Bounds of the monitor where a fullscreen game/video/presentation is in front, so only
+   * a pet on that monitor steps aside. null if none or unsupported.
+   */
+  fullscreenMonitor: ScreenRect | null;
 }
 
 export interface AppInfo {
@@ -63,6 +74,11 @@ export const ipc = {
   environment: () => invoke<EnvironmentSnapshot>('environment_snapshot'),
   /** Re-assert topmost z-order for the pet window (Windows can drop it below the taskbar). */
   keepPetOnTop: () => invoke<void>('keep_pet_on_top'),
+  /**
+   * After the pet's context menu closes: if the pet window took the foreground, hand it
+   * back to the app the user was working in. No-op otherwise (e.g. the palette opened).
+   */
+  restoreForeground: () => invoke<void>('restore_foreground'),
   openSettings: (section?: SettingSection) => invoke<void>('open_settings', { section }),
   showPalette: () => invoke<void>('show_palette'),
   hidePalette: () => invoke<void>('hide_palette'),
