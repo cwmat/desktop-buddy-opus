@@ -1,0 +1,19 @@
+# deps & build output
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# generated sprite previews (pnpm pets:preview)
+previews/
+
+# editor / os
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# local agent state
+.claude/settings.local.json
